@@ -11,7 +11,7 @@ echo "=========================================="
 
 # Check prerequisites
 echo ""
-echo "[1/7] Checking prerequisites..."
+echo "[1/8] Checking prerequisites..."
 
 # Find a stable Python (3.11-3.13). Python 3.14 has ensurepip issues.
 PYTHON_BIN=""
@@ -48,7 +48,7 @@ fi
 
 # Create backend venv
 echo ""
-echo "[2/7] Creating Python virtual environment at backend/.venv..."
+echo "[2/8] Creating Python virtual environment at backend/.venv..."
 cd "$BACKEND_DIR"
 $PYTHON_BIN -m venv .venv
 source .venv/bin/activate
@@ -56,7 +56,7 @@ echo "  venv created and activated"
 
 # Install backend dependencies
 echo ""
-echo "[3/7] Installing backend dependencies..."
+echo "[3/8] Installing backend dependencies..."
 pip install --upgrade pip -q
 pip install -r requirements.txt -q
 echo "  Backend dependencies installed"
@@ -65,7 +65,7 @@ deactivate
 
 # Install frontend dependencies
 echo ""
-echo "[4/7] Installing frontend dependencies..."
+echo "[4/8] Installing frontend dependencies..."
 cd "$FRONTEND_DIR"
 npm install --silent
 echo "  Frontend dependencies installed"
@@ -73,7 +73,7 @@ echo "  Frontend dependencies installed"
 # Create .env
 cd "$PROJECT_ROOT"
 echo ""
-echo "[5/7] Setting up environment..."
+echo "[5/8] Setting up environment..."
 if [ ! -f .env ]; then
     cp .env.example .env
     echo "  Created .env from .env.example"
@@ -84,18 +84,25 @@ fi
 
 # Create data directories
 echo ""
-echo "[6/7] Creating data directories..."
+echo "[6/8] Creating data directories..."
 mkdir -p data/policies data/tickets
 echo "  Data directories created"
 
 # Create SQLite database
 echo ""
-echo "[7/7] Initializing database..."
+echo "[7/8] Initializing database..."
 cd "$BACKEND_DIR"
 source .venv/bin/activate
 python -c "from src.db import init_db; import asyncio; asyncio.run(init_db('phoenixloop.db'))"
-deactivate
 echo "  Database initialized"
+
+# Install pre-commit hooks
+echo ""
+echo "[8/8] Installing pre-commit hooks..."
+cd "$PROJECT_ROOT"
+pre-commit install
+deactivate
+echo "  Pre-commit hooks installed"
 
 echo ""
 echo "=========================================="
