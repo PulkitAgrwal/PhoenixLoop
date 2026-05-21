@@ -1,0 +1,146 @@
+[
+  {
+    "customer_id": "CUST-001",
+    "name": "Jane Doe",
+    "email": "jane.doe@example.com",
+    "plan": "Pro",
+    "signup_date": "2024-03-15",
+    "workspace_role": "owner"
+  },
+  {
+    "customer_id": "CUST-002",
+    "name": "Marcus Rivera",
+    "email": "marcus.rivera@techstartup.io",
+    "plan": "Enterprise",
+    "signup_date": "2024-01-10",
+    "workspace_role": "admin"
+  },
+  {
+    "customer_id": "CUST-003",
+    "name": "Priya Sharma",
+    "email": "priya.sharma@designco.com",
+    "plan": "Business",
+    "signup_date": "2024-06-22",
+    "workspace_role": "owner"
+  },
+  {
+    "customer_id": "CUST-004",
+    "name": "Liam Chen",
+    "email": "liam.chen@freelance.dev",
+    "plan": "Free",
+    "signup_date": "2025-01-05",
+    "workspace_role": "member"
+  },
+  {
+    "customer_id": "CUST-005",
+    "name": "Sofia Andersen",
+    "email": "sofia.andersen@nordicops.se",
+    "plan": "Pro",
+    "signup_date": "2024-09-18",
+    "workspace_role": "admin"
+  },
+  {
+    "customer_id": "CUST-006",
+    "name": "David Kim",
+    "email": "david.kim@megacorp.com",
+    "plan": "Enterprise",
+    "signup_date": "2024-02-28",
+    "workspace_role": "owner"
+  },
+  {
+    "customer_id": "CUST-007",
+    "name": "Aisha Patel",
+    "email": "aisha.patel@creativeagency.co",
+    "plan": "Business",
+    "signup_date": "2024-11-03",
+    "workspace_role": "admin"
+  },
+  {
+    "customer_id": "CUST-008",
+    "name": "Tom Bradley",
+    "email": "tom.bradley@smallbiz.net",
+    "plan": "Free",
+    "signup_date": "2025-04-12",
+    "workspace_role": "owner"
+  },
+  {
+    "customer_id": "CUST-009",
+    "name": "Elena Volkov",
+    "email": "elena.volkov@dataflow.ru",
+    "plan": "Pro",
+    "signup_date": "2024-07-30",
+    "workspace_role": "member"
+  },
+  {
+    "customer_id": "CUST-010",
+    "name": "James O'Brien",
+    "email": "james.obrien@enterprise-solutions.ie",
+    "plan": "Enterprise",
+    "signup_date": "2024-04-05",
+    "workspace_role": "admin"
+  },
+  {
+    "customer_id": "CUST-011",
+    "name": "Mei Lin Wu",
+    "email": "mei.wu@startupventures.cn",
+    "plan": "Business",
+    "signup_date": "2025-02-14",
+    "workspace_role": "owner"
+  },
+  {
+    "customer_id": "CUST-012",
+    "name": "Carlos Gutierrez",
+    "email": "carlos.gutierrez@latamdev.mx",
+    "plan": "Pro",
+    "signup_date": "2024-08-20",
+    "workspace_role": "owner"
+  },
+  {
+    "customer_id": "CUST-013",
+    "name": "Rachel Foster",
+    "email": "rachel.foster@gmail.com",
+    "plan": "Free",
+    "signup_date": "2025-06-01",
+    "workspace_role": "member"
+  },
+  {
+    "customer_id": "CUST-014",
+    "name": "Nathan Wright",
+    "email": "nathan.wright@consulting-group.com",
+    "plan": "Business",
+    "signup_date": "2024-10-17",
+    "workspace_role": "admin"
+  },
+  {
+    "customer_id": "CUST-015",
+    "name": "Olivia Tanaka",
+    "email": "olivia.tanaka@pacific-media.jp",
+    "plan": "Enterprise",
+    "signup_date": "2024-05-09",
+    "workspace_role": "owner"
+  },
+  {
+    "customer_id": "CUST-016",
+    "name": "Ryan Mitchell",
+    "email": "ryan.mitchell@quicklaunch.co",
+    "plan": "Pro",
+    "signup_date": "2025-03-22",
+    "workspace_role": "owner"
+  },
+  {
+    "customer_id": "CUST-017",
+    "name": "Hannah Eriksson",
+    "email": "hannah.eriksson@scandi-tech.dk",
+    "plan": "Free",
+    "signup_date": "2026-01-08",
+    "workspace_role": "member"
+  },
+  {
+    "customer_id": "CUST-018",
+    "name": "Ahmed Hassan",
+    "email": "ahmed.hassan@buildright.ae",
+    "plan": "Business",
+    "signup_date": "2025-08-15",
+    "workspace_role": "owner"
+  }
+]

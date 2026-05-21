@@ -1,0 +1,200 @@
+[
+  {
+    "subscription_id": "SUB-001",
+    "customer_id": "CUST-001",
+    "plan": "Pro",
+    "billing_cycle": "monthly",
+    "status": "active",
+    "started_at": "2024-03-15",
+    "canceled_at": null,
+    "last_payment_date": "2026-05-01",
+    "monthly_amount": 29
+  },
+  {
+    "subscription_id": "SUB-002",
+    "customer_id": "CUST-002",
+    "plan": "Enterprise",
+    "billing_cycle": "annual",
+    "status": "active",
+    "started_at": "2024-01-10",
+    "canceled_at": null,
+    "last_payment_date": "2026-01-10",
+    "monthly_amount": 199
+  },
+  {
+    "subscription_id": "SUB-003",
+    "customer_id": "CUST-003",
+    "plan": "Business",
+    "billing_cycle": "annual",
+    "status": "active",
+    "started_at": "2024-06-22",
+    "canceled_at": null,
+    "last_payment_date": "2025-06-22",
+    "monthly_amount": 79
+  },
+  {
+    "subscription_id": "SUB-004",
+    "customer_id": "CUST-004",
+    "plan": "Free",
+    "billing_cycle": "monthly",
+    "status": "active",
+    "started_at": "2025-01-05",
+    "canceled_at": null,
+    "last_payment_date": null,
+    "monthly_amount": 0
+  },
+  {
+    "subscription_id": "SUB-005",
+    "customer_id": "CUST-005",
+    "plan": "Pro",
+    "billing_cycle": "annual",
+    "status": "canceled",
+    "started_at": "2024-09-18",
+    "canceled_at": "2026-04-25",
+    "last_payment_date": "2025-09-18",
+    "monthly_amount": 29
+  },
+  {
+    "subscription_id": "SUB-006",
+    "customer_id": "CUST-006",
+    "plan": "Enterprise",
+    "billing_cycle": "annual",
+    "status": "active",
+    "started_at": "2024-02-28",
+    "canceled_at": null,
+    "last_payment_date": "2026-02-28",
+    "monthly_amount": 199
+  },
+  {
+    "subscription_id": "SUB-007",
+    "customer_id": "CUST-007",
+    "plan": "Business",
+    "billing_cycle": "monthly",
+    "status": "active",
+    "started_at": "2024-11-03",
+    "canceled_at": null,
+    "last_payment_date": "2026-05-03",
+    "monthly_amount": 79
+  },
+  {
+    "subscription_id": "SUB-008",
+    "customer_id": "CUST-008",
+    "plan": "Free",
+    "billing_cycle": "monthly",
+    "status": "active",
+    "started_at": "2025-04-12",
+    "canceled_at": null,
+    "last_payment_date": null,
+    "monthly_amount": 0
+  },
+  {
+    "subscription_id": "SUB-009",
+    "customer_id": "CUST-009",
+    "plan": "Pro",
+    "billing_cycle": "monthly",
+    "status": "past_due",
+    "started_at": "2024-07-30",
+    "canceled_at": null,
+    "last_payment_date": "2026-03-30",
+    "monthly_amount": 29
+  },
+  {
+    "subscription_id": "SUB-010",
+    "customer_id": "CUST-010",
+    "plan": "Enterprise",
+    "billing_cycle": "annual",
+    "status": "active",
+    "started_at": "2024-04-05",
+    "canceled_at": null,
+    "last_payment_date": "2026-04-05",
+    "monthly_amount": 199
+  },
+  {
+    "subscription_id": "SUB-011",
+    "customer_id": "CUST-011",
+    "plan": "Business",
+    "billing_cycle": "monthly",
+    "status": "past_due",
+    "started_at": "2025-02-14",
+    "canceled_at": null,
+    "last_payment_date": "2026-04-14",
+    "monthly_amount": 79
+  },
+  {
+    "subscription_id": "SUB-012",
+    "customer_id": "CUST-012",
+    "plan": "Pro",
+    "billing_cycle": "monthly",
+    "status": "canceled",
+    "started_at": "2024-08-20",
+    "canceled_at": "2026-05-10",
+    "last_payment_date": "2026-05-01",
+    "monthly_amount": 29
+  },
+  {
+    "subscription_id": "SUB-013",
+    "customer_id": "CUST-013",
+    "plan": "Free",
+    "billing_cycle": "monthly",
+    "status": "active",
+    "started_at": "2025-06-01",
+    "canceled_at": null,
+    "last_payment_date": null,
+    "monthly_amount": 0
+  },
+  {
+    "subscription_id": "SUB-014",
+    "customer_id": "CUST-014",
+    "plan": "Business",
+    "billing_cycle": "annual",
+    "status": "active",
+    "started_at": "2024-10-17",
+    "canceled_at": null,
+    "last_payment_date": "2025-10-17",
+    "monthly_amount": 79
+  },
+  {
+    "subscription_id": "SUB-015",
+    "customer_id": "CUST-015",
+    "plan": "Enterprise",
+    "billing_cycle": "annual",
+    "status": "canceled",
+    "started_at": "2024-05-09",
+    "canceled_at": "2026-03-15",
+    "last_payment_date": "2025-05-09",
+    "monthly_amount": 199
+  },
+  {
+    "subscription_id": "SUB-016",
+    "customer_id": "CUST-016",
+    "plan": "Pro",
+    "billing_cycle": "monthly",
+    "status": "active",
+    "started_at": "2025-03-22",
+    "canceled_at": null,
+    "last_payment_date": "2026-05-01",
+    "monthly_amount": 29
+  },
+  {
+    "subscription_id": "SUB-017",
+    "customer_id": "CUST-017",
+    "plan": "Free",
+    "billing_cycle": "monthly",
+    "status": "active",
+    "started_at": "2026-01-08",
+    "canceled_at": null,
+    "last_payment_date": null,
+    "monthly_amount": 0
+  },
+  {
+    "subscription_id": "SUB-018",
+    "customer_id": "CUST-018",
+    "plan": "Business",
+    "billing_cycle": "annual",
+    "status": "active",
+    "started_at": "2025-08-15",
+    "canceled_at": null,
+    "last_payment_date": "2025-08-15",
+    "monthly_amount": 79
+  }
+]
