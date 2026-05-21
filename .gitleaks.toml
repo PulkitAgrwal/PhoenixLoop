@@ -10,4 +10,5 @@ regexTarget = "line"
 regexes = [
     '''test-key''',
     '''your-.*-here''',
+    '''gitleaks-\d+\.\d+\.\d+''',
 ]

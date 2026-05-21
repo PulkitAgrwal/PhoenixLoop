@@ -1,7 +1,5 @@
 """Tests for configuration module."""
 
-import os
-import pytest
 from src.config import Settings
 
 
@@ -19,8 +17,9 @@ class TestSettings:
         assert settings.release_score_threshold == 0.75
         assert settings.latency_budget_ms == 10000
 
-    def test_default_app_settings(self):
+    def test_default_app_settings(self, monkeypatch):
         """Verify default application settings."""
+        monkeypatch.delenv("APP_ENV", raising=False)
         settings = Settings(
             google_api_key="test",
             phoenix_api_key="test",

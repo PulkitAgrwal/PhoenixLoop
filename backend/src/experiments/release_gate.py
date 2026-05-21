@@ -89,12 +89,12 @@ def check_promotion_rules(experiment: ExperimentRecord) -> ReleaseGateDecision:
     # Rule 1: Score improvement
     baseline_score = experiment.baseline_release_score or 0.0
     candidate_score = experiment.candidate_release_score or 0.0
-    delta = candidate_score - baseline_score
+    delta = round(candidate_score - baseline_score, 10)
     rules["score_delta"] = {
         "description": "Candidate score >= baseline + 0.05",
         "threshold": 0.05,
         "actual": round(delta, 4),
-        "passed": delta >= 0.05,
+        "passed": delta >= 0.05 - 1e-9,
     }
 
     # Rule 2: Zero critical failures
