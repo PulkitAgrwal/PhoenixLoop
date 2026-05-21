@@ -2,12 +2,11 @@
 
 import logging
 
+import aiosqlite
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-import aiosqlite
-
-from src.api.dependencies import get_db_session, get_request_id, PaginationParams
+from src.api.dependencies import PaginationParams, get_db_session, get_request_id
 from src.models import ApiResponse, PaginatedData
 
 logger = logging.getLogger(__name__)
@@ -67,6 +66,8 @@ async def get_release_gate_decision(
     from src.db import (
         get_experiment,
         get_human_approval_for_decision,
+    )
+    from src.db import (
         get_release_gate_decision as db_get_decision,
     )
 

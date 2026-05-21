@@ -2,11 +2,10 @@
 
 import logging
 
+import aiosqlite
 from fastapi import APIRouter, Depends
 
-import aiosqlite
-
-from src.api.dependencies import get_db_session, get_request_id, PaginationParams
+from src.api.dependencies import PaginationParams, get_db_session, get_request_id
 from src.models import ApiResponse, PaginatedData
 
 logger = logging.getLogger(__name__)

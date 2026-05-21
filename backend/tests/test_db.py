@@ -1,8 +1,7 @@
 """Tests for the async SQLite database layer."""
 
-import pytest
 import aiosqlite
-
+import pytest
 from src.db import (
     get_active_failure_aggregates,
     get_agent_run,
@@ -58,7 +57,6 @@ from src.models import (
     ToolCallRecord,
     TriggerReason,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

@@ -1,6 +1,5 @@
 """Tests for agent tool functions."""
 
-import pytest
 
 from src.agent.tools import (
     check_refund_eligibility,
@@ -10,7 +9,6 @@ from src.agent.tools import (
     lookup_subscription,
     search_policy,
 )
-
 
 # ---------------------------------------------------------------------------
 # search_policy

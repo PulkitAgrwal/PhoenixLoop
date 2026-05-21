@@ -26,7 +26,6 @@ from typing import Protocol
 from phoenix.client import Client
 from pydantic import BaseModel, Field
 
-from src.exceptions import ExperimentError
 from src.models import ExperimentRecord, ExperimentStatus, ImprovementTrigger
 
 logger = logging.getLogger(__name__)

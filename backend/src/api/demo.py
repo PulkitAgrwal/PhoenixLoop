@@ -6,11 +6,10 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+import aiosqlite
 from fastapi import APIRouter, Depends
 
-import aiosqlite
-
-from src.api.dependencies import get_db_session, get_request_id, PaginationParams
+from src.api.dependencies import PaginationParams, get_db_session, get_request_id
 from src.models import (
     ApiResponse,
     AuditEvent,
@@ -219,7 +218,7 @@ async def seed_demo_data(
     Seeds the 7 primary demo tickets (hardcoded) plus up to 61 supplementary
     tickets from ``data/tickets/tickets_seed.jsonl``.
     """
-    from src.db import get_ticket, insert_ticket, insert_audit_event
+    from src.db import get_ticket, insert_audit_event, insert_ticket
 
     seeded_count = 0
     skipped_count = 0
@@ -288,17 +287,19 @@ async def run_all_demo(
     Errors on individual tickets are captured and reported rather than aborting
     the entire batch, so partial results are always returned.
     """
+    from src.agent.support_agent import run_agent
     from src.db import (
-        list_tickets as db_list_tickets,
         insert_agent_run,
         insert_conversation_session,
         insert_eval_result,
     )
-    from src.agent.support_agent import run_agent
+    from src.db import (
+        list_tickets as db_list_tickets,
+    )
     from src.diagnosis.failure_aggregator import check_thresholds, update_aggregates
     from src.evaluation.runner import run_all_evals
-    from src.tracing.phoenix_client import get_phoenix_client
     from src.models import ConversationSession
+    from src.tracing.phoenix_client import get_phoenix_client
 
     BATCH_SIZE = 5
 

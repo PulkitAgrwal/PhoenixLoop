@@ -1,17 +1,14 @@
 """Tests for the failure aggregation pipeline."""
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
 
 import aiosqlite
 import pytest
-
 from src.db import (
     _CREATE_TABLES_SQL,
     get_failure_aggregate,
     init_db,
     insert_improvement_trigger,
-    list_improvement_triggers,
     upsert_failure_aggregate,
 )
 from src.diagnosis.failure_aggregator import (
@@ -30,7 +27,6 @@ from src.models import (
     ImprovementTrigger,
     TriggerReason,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

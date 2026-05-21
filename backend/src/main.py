@@ -1,12 +1,20 @@
 """PhoenixLoop FastAPI application."""
 
-from contextlib import asynccontextmanager
 import logging
+from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api.conversations import router as conversations_router
+from src.api.demo import router as demo_router
+from src.api.evals import router as evals_router
+from src.api.experiments import router as experiments_router
+from src.api.improvements import router as improvements_router
+from src.api.middleware import RequestIdMiddleware, register_exception_handlers
+from src.api.release_gate import router as release_gate_router
+from src.api.tickets import router as tickets_router
 from src.config import get_settings
 from src.db import init_db
 from src.utils.logging_config import setup_logging
@@ -21,12 +29,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     setup_logging(settings.app_env)
     logger.info("PhoenixLoop starting up...")
 
-    # Extract DB path from the database_url setting
     db_path = settings.database_url.replace("sqlite:///", "")
     await init_db(db_path)
     logger.info("Database initialized")
 
-    # Try to set up Phoenix instrumentation (optional)
     try:
         from src.tracing.instrumentor import setup_instrumentation
 
@@ -35,10 +41,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         logger.warning("Instrumentation setup failed (non-fatal): %s", exc)
 
-    # Try to register annotation configs (optional)
     try:
-        from src.tracing.phoenix_client import get_phoenix_client
         from src.tracing.annotations import register_annotation_configs
+        from src.tracing.phoenix_client import get_phoenix_client
 
         phoenix = get_phoenix_client()
         if phoenix:
@@ -61,16 +66,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Import and register routers
-from src.api.middleware import RequestIdMiddleware, register_exception_handlers
-from src.api.tickets import router as tickets_router
-from src.api.conversations import router as conversations_router
-from src.api.evals import router as evals_router
-from src.api.improvements import router as improvements_router
-from src.api.experiments import router as experiments_router
-from src.api.release_gate import router as release_gate_router
-from src.api.demo import router as demo_router
 
 app.add_middleware(RequestIdMiddleware)
 register_exception_handlers(app)

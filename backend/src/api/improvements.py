@@ -4,12 +4,11 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
+import aiosqlite
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-import aiosqlite
-
-from src.api.dependencies import get_db_session, get_request_id, PaginationParams
+from src.api.dependencies import PaginationParams, get_db_session, get_request_id
 from src.models import ApiResponse, ImprovementTrigger, PaginatedData, TriggerReason
 
 logger = logging.getLogger(__name__)
@@ -137,8 +136,8 @@ async def analyze_improvement(
     """Run MCP-backed root cause diagnosis on an improvement trigger."""
     from src.db import get_improvement_trigger, update_improvement_trigger
     from src.diagnosis.phoenix_mcp import PhoenixMCPClient
-    from src.diagnosis.root_cause import diagnose
     from src.diagnosis.proposal_generator import generate_proposal
+    from src.diagnosis.root_cause import diagnose
 
     trigger = await get_improvement_trigger(db, trigger_id)
     if not trigger:

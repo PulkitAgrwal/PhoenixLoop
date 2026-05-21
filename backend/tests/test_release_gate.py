@@ -1,16 +1,15 @@
 """Tests for release gate scoring, promotion rules, and human approval flow."""
 
+from src.experiments.release_gate import (
+    check_promotion_rules,
+    compute_release_score,
+)
 from src.models import (
     ExperimentRecord,
     ExperimentStatus,
     ReleaseDecision,
     ReleaseGateDecision,
 )
-from src.experiments.release_gate import (
-    check_promotion_rules,
-    compute_release_score,
-)
-
 
 # ---------------------------------------------------------------------------
 # Helpers

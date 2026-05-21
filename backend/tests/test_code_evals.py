@@ -1,16 +1,14 @@
 """Tests for all 7 code-based evaluators."""
 
 import pytest
-
-from src.models import AgentRun, SupportTicket
+from src.evaluation.code_evals.citation_presence import CitationPresenceEvaluator
+from src.evaluation.code_evals.escalation_guard import EscalationGuardEvaluator
+from src.evaluation.code_evals.latency_budget import LatencyBudgetEvaluator
+from src.evaluation.code_evals.privacy_guard import PrivacyGuardEvaluator
+from src.evaluation.code_evals.refund_guard import RefundGuardEvaluator
 from src.evaluation.code_evals.schema_validity import SchemaValidityEvaluator
 from src.evaluation.code_evals.tool_sequence import ToolSequenceEvaluator
-from src.evaluation.code_evals.refund_guard import RefundGuardEvaluator
-from src.evaluation.code_evals.privacy_guard import PrivacyGuardEvaluator
-from src.evaluation.code_evals.escalation_guard import EscalationGuardEvaluator
-from src.evaluation.code_evals.citation_presence import CitationPresenceEvaluator
-from src.evaluation.code_evals.latency_budget import LatencyBudgetEvaluator
-
+from src.models import AgentRun, SupportTicket
 
 # ---------------------------------------------------------------------------
 # Test helpers

@@ -10,13 +10,13 @@ from phoenix.client import Client
 
 from src.evaluation import BaseEvaluator, EvalOutput
 from src.evaluation.code_evals import (
+    CitationPresenceEvaluator,
+    EscalationGuardEvaluator,
+    LatencyBudgetEvaluator,
+    PrivacyGuardEvaluator,
+    RefundGuardEvaluator,
     SchemaValidityEvaluator,
     ToolSequenceEvaluator,
-    RefundGuardEvaluator,
-    PrivacyGuardEvaluator,
-    EscalationGuardEvaluator,
-    CitationPresenceEvaluator,
-    LatencyBudgetEvaluator,
 )
 from src.evaluation.llm_judges import (
     GroundednessEvaluator,
@@ -25,9 +25,9 @@ from src.evaluation.llm_judges import (
     SafetyPrivacyEvaluator,
 )
 from src.evaluation.tool_evals import (
-    ToolSelectionEvaluator,
     ToolInvocationEvaluator,
     ToolResponseHandlingEvaluator,
+    ToolSelectionEvaluator,
 )
 from src.models import AgentRun, AnnotationLevel, EvalResult, EvalType, SupportTicket
 from src.tracing.annotations import write_session_annotation, write_span_annotation

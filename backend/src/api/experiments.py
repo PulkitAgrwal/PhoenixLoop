@@ -2,12 +2,11 @@
 
 import logging
 
+import aiosqlite
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-import aiosqlite
-
-from src.api.dependencies import get_db_session, get_request_id, PaginationParams
+from src.api.dependencies import PaginationParams, get_db_session, get_request_id
 from src.models import ApiResponse, PaginatedData
 
 logger = logging.getLogger(__name__)
@@ -65,6 +64,8 @@ async def get_experiment(
     """Get an experiment with its release gate decision."""
     from src.db import (
         get_experiment as db_get_experiment,
+    )
+    from src.db import (
         get_release_gate_for_experiment,
     )
 

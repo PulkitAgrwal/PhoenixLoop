@@ -2,7 +2,6 @@
 
 import pytest
 from pydantic import ValidationError
-
 from src.models import (
     AgentRun,
     AnnotationLevel,
@@ -28,7 +27,6 @@ from src.models import (
     ToolCallRecord,
     TriggerReason,
 )
-
 
 # ---------------------------------------------------------------------------
 # Enum tests

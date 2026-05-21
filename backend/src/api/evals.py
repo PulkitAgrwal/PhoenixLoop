@@ -2,11 +2,10 @@
 
 import logging
 
+import aiosqlite
 from fastapi import APIRouter, Depends
 
-import aiosqlite
-
-from src.api.dependencies import get_db_session, get_request_id, PaginationParams
+from src.api.dependencies import PaginationParams, get_db_session, get_request_id
 from src.models import ApiResponse, PaginatedData
 
 logger = logging.getLogger(__name__)
@@ -73,8 +72,10 @@ async def rerun_evals(
     from src.db import (
         get_agent_run,
         get_eval_results_for_run,
-        get_ticket as db_get_ticket,
         insert_eval_result,
+    )
+    from src.db import (
+        get_ticket as db_get_ticket,
     )
     from src.evaluation.runner import run_all_evals
     from src.tracing.phoenix_client import get_phoenix_client

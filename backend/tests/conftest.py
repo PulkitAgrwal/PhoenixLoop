@@ -1,7 +1,6 @@
 """Shared test fixtures for PhoenixLoop backend tests."""
 
 import os
-import pytest
 
 # Set test environment before importing anything else
 os.environ["APP_ENV"] = "test"

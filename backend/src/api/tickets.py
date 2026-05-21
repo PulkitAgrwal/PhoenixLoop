@@ -4,11 +4,10 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
+import aiosqlite
 from fastapi import APIRouter, Depends
 
-import aiosqlite
-
-from src.api.dependencies import get_db_session, get_request_id, PaginationParams
+from src.api.dependencies import PaginationParams, get_db_session, get_request_id
 from src.models import ApiResponse, ConversationSession, PaginatedData
 
 logger = logging.getLogger(__name__)
@@ -64,13 +63,15 @@ async def run_ticket(
     db: aiosqlite.Connection = Depends(get_db_session),
 ) -> ApiResponse:
     """Run agent on a ticket, run evals, update aggregates."""
+    from src.agent.support_agent import run_agent
     from src.db import (
         get_ticket as db_get_ticket,
+    )
+    from src.db import (
         insert_agent_run,
         insert_conversation_session,
         insert_eval_result,
     )
-    from src.agent.support_agent import run_agent
     from src.diagnosis.failure_aggregator import check_thresholds, update_aggregates
     from src.evaluation.runner import run_all_evals
     from src.tracing.phoenix_client import get_phoenix_client
