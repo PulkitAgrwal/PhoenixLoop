@@ -21,10 +21,13 @@ Phoenix ``run_experiment`` API (verified via context7, May 2026):
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from phoenix.client import Client
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    import aiosqlite
 
 from src.models import ExperimentRecord, ExperimentStatus, ImprovementTrigger
 
@@ -63,6 +66,7 @@ async def run_experiment(
     trigger: ImprovementTrigger,
     phoenix_client: Client | None,
     mcp_client: PhoenixMCPProtocol,
+    db: "aiosqlite.Connection | None" = None,
 ) -> ExperimentRecord:
     """Run a baseline vs candidate experiment via Phoenix.
 
@@ -106,10 +110,27 @@ async def run_experiment(
 
     # 2. Extract candidate version from trigger patch proposal
     candidate_version = "unknown"
+    candidate_prompt_version_id: str | None = None
     if trigger.patch_proposal_json:
         candidate_version = trigger.patch_proposal_json.get(
             "candidate_prompt_version", "unknown"
         )
+        # The analyze flow now also persists the candidate locally and stamps
+        # ``local_prompt_version_id`` onto the proposal — pick it up so the
+        # release-gate approval can flip ``prompts.active_version_id`` later.
+        candidate_prompt_version_id = trigger.patch_proposal_json.get(
+            "local_prompt_version_id"
+        )
+
+    # Resolve the local baseline FK from the prompts table (the active
+    # version is what the agent is currently running with).
+    baseline_prompt_version_id: str | None = None
+    if db is not None:
+        from src.db import get_prompt as db_get_prompt
+
+        active = await db_get_prompt(db, "support-agent")
+        if active and active.active_version_id:
+            baseline_prompt_version_id = active.active_version_id
 
     # 3. Determine dataset name — regression examples first, fall back to seed
     dataset_name = _select_dataset_name(trigger)
@@ -176,6 +197,8 @@ async def run_experiment(
         eval_summary_json=metrics.eval_summary,
         started_at=now,
         completed_at=datetime.now(timezone.utc).isoformat(),
+        baseline_prompt_version_id=baseline_prompt_version_id,
+        candidate_prompt_version_id=candidate_prompt_version_id,
         created_at=now,
     )
 

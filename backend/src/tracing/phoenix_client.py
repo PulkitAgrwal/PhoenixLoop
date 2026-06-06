@@ -27,7 +27,7 @@ def get_phoenix_client() -> Optional[Client]:
 
     try:
         client = Client(
-            endpoint=settings.phoenix_base_url,
+            base_url=settings.phoenix_base_url,
             api_key=settings.phoenix_api_key,
         )
         logger.info("Phoenix client initialized for %s", settings.phoenix_base_url)

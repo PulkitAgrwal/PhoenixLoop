@@ -134,6 +134,7 @@ async def analyze_improvement(
     db: aiosqlite.Connection = Depends(get_db_session),
 ) -> ApiResponse:
     """Run MCP-backed root cause diagnosis on an improvement trigger."""
+    from src.agent.prompts import get_production_prompt
     from src.db import get_improvement_trigger, update_improvement_trigger
     from src.diagnosis.phoenix_mcp import PhoenixMCPClient
     from src.diagnosis.proposal_generator import generate_proposal
@@ -147,14 +148,26 @@ async def analyze_improvement(
 
     mcp_client = PhoenixMCPClient()
 
+    # Resolve the production prompt locally (post-spec-0 the local DB is the
+    # source of truth; passing it down avoids the Phoenix MCP fallback warning)
+    current_prompt_text, _ = await get_production_prompt(db)
+
     # Run root cause diagnosis
-    diagnosis = await diagnose(trigger, mcp_client)
+    diagnosis = await diagnose(trigger, mcp_client, current_prompt=current_prompt_text)
     trigger.diagnosis_json = diagnosis
     trigger.status = "diagnosed"
     trigger.updated_at = datetime.now(timezone.utc).isoformat()
 
-    # Generate patch proposal
-    proposal = await generate_proposal(trigger, diagnosis, mcp_client)
+    # Generate patch proposal. Pass ``db`` so the candidate is persisted as a
+    # local prompt_versions row — the release-gate approve flow needs that FK
+    # to flip ``prompts.active_version_id`` once the candidate is promoted.
+    proposal = await generate_proposal(
+        trigger,
+        diagnosis,
+        mcp_client,
+        current_prompt=current_prompt_text,
+        db=db,
+    )
     trigger.patch_proposal_json = proposal
     trigger.status = "proposal_ready"
     trigger.updated_at = datetime.now(timezone.utc).isoformat()

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
@@ -30,6 +30,12 @@ import { Separator } from "@/components/ui/separator";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+import type {
+  ActivityEvent,
+  ActivityEventKind,
+  ConfigResponse,
+  HealthResponse,
+} from "@/lib/types";
 
 // ─── Animation variants ────────────────────────────────────────────────────
 
@@ -113,59 +119,23 @@ const LOOP_STAGES = [
   },
 ] as const;
 
-// ─── Recent Activity placeholder items ────────────────────────────────────
+// ─── Activity feed visual mapping ─────────────────────────────────────────
 
-interface ActivityItem {
-  id: string;
-  icon: React.ElementType;
-  iconColor: string;
-  title: string;
-  subtitle: string;
-  time: string;
-}
+const ACTIVITY_ICON: Record<ActivityEventKind, React.ElementType> = {
+  agent_run: Flame,
+  failure: AlertTriangle,
+  improvement_trigger: Wrench,
+  experiment: FlaskConical,
+  release_decision: ShieldCheck,
+};
 
-const PLACEHOLDER_ACTIVITY: ActivityItem[] = [
-  {
-    id: "1",
-    icon: Flame,
-    iconColor: "text-violet-500",
-    title: "Agent run completed",
-    subtitle: "Ticket #T-001 · refund · latency 834 ms",
-    time: "just now",
-  },
-  {
-    id: "2",
-    icon: CheckCircle,
-    iconColor: "text-blue-500",
-    title: "Evaluation finished",
-    subtitle: "tool_use_correctness · score 0.42 · FAIL",
-    time: "2 min ago",
-  },
-  {
-    id: "3",
-    icon: AlertTriangle,
-    iconColor: "text-amber-500",
-    title: "Failure aggregated",
-    subtitle: "missing_required_tool · 5 occurrences",
-    time: "5 min ago",
-  },
-  {
-    id: "4",
-    icon: FlaskConical,
-    iconColor: "text-pink-500",
-    title: "Experiment launched",
-    subtitle: "candidate v1.1.0 vs baseline v1.0.0",
-    time: "12 min ago",
-  },
-  {
-    id: "5",
-    icon: ShieldCheck,
-    iconColor: "text-green-500",
-    title: "Release gate passed",
-    subtitle: "Promoted v1.1.0 → production",
-    time: "18 min ago",
-  },
-];
+const ACTIVITY_COLOR: Record<ActivityEventKind, string> = {
+  agent_run: "text-violet-500",
+  failure: "text-amber-500",
+  improvement_trigger: "text-blue-500",
+  experiment: "text-pink-500",
+  release_decision: "text-green-500",
+};
 
 // ─── Main component ────────────────────────────────────────────────────────
 
@@ -175,6 +145,46 @@ export default function HomePage() {
     "idle" | "loading" | "success" | "error"
   >("idle");
   const [seedMessage, setSeedMessage] = useState<string>("");
+
+  const [events, setEvents] = useState<ActivityEvent[]>([]);
+  const [eventsLoading, setEventsLoading] = useState(true);
+  const [healthData, setHealthData] = useState<HealthResponse | null>(null);
+  const [configData, setConfigData] = useState<ConfigResponse | null>(null);
+  const [latestExperiment, setLatestExperiment] = useState<{
+    experiment_id: string;
+    status: string;
+  } | null>(null);
+
+  useEffect(() => {
+    async function load() {
+      setEventsLoading(true);
+      const [actRes, healthRes, configRes, expRes] = await Promise.all([
+        api.activity.list(5),
+        api.health.check(),
+        api.config.get(),
+        api.experiments.list(),
+      ]);
+      if (actRes.ok && actRes.data) {
+        setEvents(actRes.data as ActivityEvent[]);
+      }
+      if (healthRes.ok && healthRes.data) {
+        setHealthData(healthRes.data as HealthResponse);
+      }
+      if (configRes.ok && configRes.data) {
+        setConfigData(configRes.data as ConfigResponse);
+      }
+      if (expRes.ok && expRes.data) {
+        const items = (
+          expRes.data as { items?: { experiment_id: string; status: string }[] }
+        ).items;
+        if (items && items.length > 0) {
+          setLatestExperiment(items[0]);
+        }
+      }
+      setEventsLoading(false);
+    }
+    void load();
+  }, []);
 
   async function handleSeedDemo() {
     setSeedStatus("loading");
@@ -304,26 +314,40 @@ export default function HomePage() {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard
             title="Phoenix Connected"
-            value="Connected"
-            description="Observability backend active"
+            value={
+              healthData
+                ? healthData.checks.phoenix.ok
+                  ? "Connected"
+                  : "Disconnected"
+                : "…"
+            }
+            description={
+              healthData
+                ? healthData.checks.phoenix.detail.slice(0, 40)
+                : "Probing…"
+            }
             icon={<Wifi className="h-4 w-4" />}
           />
           <StatCard
             title="Agent Version"
-            value="1.0.0"
-            description="Current production build"
+            value={configData?.agent_version ?? "…"}
+            description={configData?.agent_name ?? ""}
             icon={<Flame className="h-4 w-4" />}
           />
           <StatCard
             title="Active Prompt"
-            value="production"
-            description="Serving live traffic"
+            value={configData?.active_prompt_version ?? "…"}
+            description={configData ? `model: ${configData.gemini_model}` : ""}
             icon={<Tag className="h-4 w-4" />}
           />
           <StatCard
             title="Last Experiment"
-            value="N/A"
-            description="No experiments run yet"
+            value={
+              latestExperiment
+                ? `${latestExperiment.experiment_id.slice(0, 8)}…`
+                : "None yet"
+            }
+            description={latestExperiment?.status ?? ""}
             icon={<Clock className="h-4 w-4" />}
           />
         </div>
@@ -360,7 +384,7 @@ export default function HomePage() {
               </Button>
               <Button
                 variant="secondary"
-                onClick={() => router.push("/failures")}
+                onClick={() => router.push("/activity/failures")}
                 className="gap-2"
               >
                 <AlertTriangle className="h-4 w-4" />
@@ -413,47 +437,76 @@ export default function HomePage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pb-4">
-            <motion.ul
-              variants={containerVariants}
-              initial="hidden"
-              animate="visible"
-              className="divide-y"
-            >
-              {PLACEHOLDER_ACTIVITY.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <motion.li
-                    key={item.id}
-                    variants={childVariants}
-                    className="flex items-start gap-3 py-3 first:pt-0 last:pb-0"
-                  >
-                    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted">
-                      <Icon className={cn("h-4 w-4", item.iconColor)} />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium leading-tight">
-                        {item.title}
-                      </p>
-                      <p className="mt-0.5 text-xs text-muted-foreground">
-                        {item.subtitle}
-                      </p>
-                    </div>
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      {item.time}
-                    </span>
-                  </motion.li>
-                );
-              })}
-            </motion.ul>
+            {eventsLoading ? (
+              <p className="py-3 text-sm text-muted-foreground">Loading…</p>
+            ) : events.length === 0 ? (
+              <div className="py-8 text-center">
+                <p className="mb-3 text-sm text-muted-foreground">
+                  No activity yet.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => router.push("/conversation")}
+                >
+                  Run a scenario
+                </Button>
+              </div>
+            ) : (
+              <motion.ul
+                variants={containerVariants}
+                initial="hidden"
+                animate="visible"
+                className="divide-y"
+              >
+                {events.map((event) => {
+                  const Icon = ACTIVITY_ICON[event.kind];
+                  const iconColor = ACTIVITY_COLOR[event.kind];
+                  const route = event.target_route;
+                  return (
+                    <motion.li
+                      key={event.event_id}
+                      variants={childVariants}
+                      className={cn(
+                        "flex items-start gap-3 py-3 first:pt-0 last:pb-0",
+                        route &&
+                          "-mx-2 cursor-pointer rounded px-2 transition-colors hover:bg-muted/30"
+                      )}
+                      onClick={route ? () => router.push(route) : undefined}
+                    >
+                      <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted">
+                        <Icon className={cn("h-4 w-4", iconColor)} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium leading-tight">
+                          {event.title}
+                        </p>
+                        {event.subtitle && (
+                          <p className="mt-0.5 text-xs text-muted-foreground">
+                            {event.subtitle}
+                          </p>
+                        )}
+                      </div>
+                      <span className="shrink-0 text-xs text-muted-foreground">
+                        {new Date(event.timestamp).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </span>
+                    </motion.li>
+                  );
+                })}
+              </motion.ul>
+            )}
             <Separator className="mt-4" />
             <div className="mt-3 flex justify-end">
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => router.push("/traces")}
+                onClick={() => router.push("/activity/runs")}
                 className="gap-1 text-xs"
               >
-                View all traces
+                View all activity
                 <ArrowRight className="h-3 w-3" />
               </Button>
             </div>

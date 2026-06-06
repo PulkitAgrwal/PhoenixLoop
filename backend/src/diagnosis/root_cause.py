@@ -104,7 +104,7 @@ async def _call_gemini_diagnosis(prompt_text: str) -> DiagnosisResult:
     settings = get_settings()
     client = genai.Client(api_key=settings.google_api_key)
     response = client.models.generate_content(
-        model="gemini-2.0-flash",
+        model=settings.gemini_model,
         contents=prompt_text,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
@@ -167,6 +167,7 @@ async def _gather_trace_evidence(
 async def diagnose(
     trigger: ImprovementTrigger,
     mcp_client: MCPReadProtocol,
+    current_prompt: str | None = None,
 ) -> dict:
     """Perform root cause diagnosis using Phoenix evidence and Gemini.
 
@@ -176,6 +177,9 @@ async def diagnose(
     Args:
         trigger: The improvement trigger with failure details.
         mcp_client: PhoenixMCPClient for reading traces and prompts.
+        current_prompt: Pre-resolved production prompt text. When provided,
+            skips the Phoenix prompt lookup — preferred path post-spec-0
+            where the local DB is the source of truth.
 
     Returns:
         Structured diagnosis dict with keys: failure_pattern, root_cause,
@@ -184,9 +188,10 @@ async def diagnose(
     # 1. Gather evidence from Phoenix traces
     evidence_text = await _gather_trace_evidence(trigger, mcp_client)
 
-    # 2. Read current production prompt
-    prompt_info = await mcp_client.read_production_prompt()
-    current_prompt = prompt_info.template if prompt_info else "(unavailable)"
+    # 2. Resolve production prompt (caller-supplied if available, MCP fallback)
+    if current_prompt is None:
+        prompt_info = await mcp_client.read_production_prompt()
+        current_prompt = prompt_info.template if prompt_info else None
     if not current_prompt:
         current_prompt = "(unavailable)"
 

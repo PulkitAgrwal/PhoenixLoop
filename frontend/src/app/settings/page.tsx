@@ -30,6 +30,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import type { ConfigResponse, HealthResponse } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -52,17 +53,6 @@ interface EvaluatorEntry {
 // ---------------------------------------------------------------------------
 // Static data
 // ---------------------------------------------------------------------------
-
-const CONFIG_ROWS: { setting: string; value: string }[] = [
-  { setting: "Database", value: "SQLite with WAL mode" },
-  { setting: "Failure Threshold (count)", value: "2" },
-  { setting: "Failure Threshold (rate)", value: "30%" },
-  { setting: "Latency Budget", value: "10,000 ms" },
-  { setting: "Max Retry Attempts", value: "3" },
-  { setting: "Active Prompt Version", value: "production" },
-  { setting: "Agent Name", value: "acmeflow_support_agent" },
-  { setting: "Agent Version", value: "1.0.0" },
-];
 
 const EVALUATORS: EvaluatorEntry[] = [
   // Code evaluators
@@ -233,12 +223,6 @@ function ConnectionCard({ status, icon }: ConnectionCardProps) {
 // Main page
 // ---------------------------------------------------------------------------
 
-interface HealthResponse {
-  status: string;
-  service: string;
-  version: string;
-}
-
 export default function SettingsPage() {
   const [connections, setConnections] = useState<ConnectionStatus[]>([
     {
@@ -274,6 +258,7 @@ export default function SettingsPage() {
     message: string;
   } | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
+  const [config, setConfig] = useState<ConfigResponse | null>(null);
 
   const checkHealth = useCallback(async () => {
     setHealthLoading(true);
@@ -284,72 +269,58 @@ export default function SettingsPage() {
       const result = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/api/health`
       );
-      const elapsed = Date.now() - start;
       const checkedAt = new Date();
+      const apiElapsed = Date.now() - start;
 
-      if (result.ok) {
-        const body: HealthResponse = await result.json();
-        setConnections([
-          {
-            name: "Backend API",
-            connected: true,
-            detail: `${body.service} v${body.version}`,
-            responseTimeMs: elapsed,
-            checkedAt,
-          },
-          {
-            name: "Phoenix Cloud",
-            connected: true,
-            detail: "PHOENIX_API_KEY configured",
-            checkedAt,
-          },
-          {
-            name: "Gemini API",
-            connected: true,
-            detail: "GEMINI_API_KEY configured",
-            checkedAt,
-          },
-          {
-            name: "Database",
-            connected: true,
-            detail: "SQLite (WAL mode) — healthy",
-            checkedAt,
-          },
-        ]);
-      } else {
+      if (!result.ok) {
         throw new Error(`HTTP ${result.status}`);
       }
+
+      const body = await result.json();
+      const data: HealthResponse = body.data;
+
+      setConnections([
+        {
+          name: "Backend API",
+          connected: true,
+          detail: `${data.service} v${data.version}`,
+          responseTimeMs: apiElapsed,
+          checkedAt,
+        },
+        {
+          name: "Phoenix Cloud",
+          connected: data.checks.phoenix.ok,
+          detail: data.checks.phoenix.detail,
+          responseTimeMs: data.checks.phoenix.response_ms,
+          checkedAt,
+        },
+        {
+          name: "Gemini API",
+          connected: data.checks.gemini.ok,
+          detail: data.checks.gemini.detail,
+          responseTimeMs: data.checks.gemini.response_ms,
+          checkedAt,
+        },
+        {
+          name: "Database",
+          connected: data.checks.database.ok,
+          detail: data.checks.database.detail,
+          checkedAt,
+        },
+      ]);
     } catch (err) {
       const checkedAt = new Date();
       const errMessage =
         err instanceof Error ? err.message : "Unknown error";
       setHealthError(`Health check failed: ${errMessage}`);
-      setConnections([
-        {
-          name: "Backend API",
+      setConnections((prev) =>
+        prev.map((c) => ({
+          ...c,
           connected: false,
-          detail: `Unreachable — ${errMessage}`,
+          detail: `Backend unreachable — ${errMessage}`,
           checkedAt,
-        },
-        {
-          name: "Phoenix Cloud",
-          connected: false,
-          detail: "Cannot verify — backend offline",
-          checkedAt,
-        },
-        {
-          name: "Gemini API",
-          connected: false,
-          detail: "Cannot verify — backend offline",
-          checkedAt,
-        },
-        {
-          name: "Database",
-          connected: false,
-          detail: "Cannot verify — backend offline",
-          checkedAt,
-        },
-      ]);
+        }))
+      );
     } finally {
       setHealthLoading(false);
     }
@@ -359,6 +330,17 @@ export default function SettingsPage() {
   useEffect(() => {
     void checkHealth();
   }, [checkHealth]);
+
+  // Fetch config once on mount
+  useEffect(() => {
+    async function load() {
+      const res = await api.config.get();
+      if (res.ok && res.data) {
+        setConfig(res.data as ConfigResponse);
+      }
+    }
+    void load();
+  }, []);
 
   async function handleSeed() {
     setSeedLoading(true);
@@ -432,26 +414,64 @@ export default function SettingsPage() {
         <h2 className="text-base font-semibold">Configuration</h2>
         <Card>
           <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-1/2">Setting</TableHead>
-                  <TableHead>Value</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {CONFIG_ROWS.map((row) => (
-                  <TableRow key={row.setting}>
-                    <TableCell className="font-medium text-sm">
-                      {row.setting}
-                    </TableCell>
-                    <TableCell className="font-mono text-sm text-muted-foreground">
-                      {row.value}
-                    </TableCell>
+            {config ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-1/2">Setting</TableHead>
+                    <TableHead>Value</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {(
+                    [
+                      ["Environment", config.app_env],
+                      ["Database", config.database_url],
+                      ["Gemini Model", config.gemini_model],
+                      ["Phoenix Project", config.phoenix_project_name],
+                      ["Phoenix Base URL", config.phoenix_base_url],
+                      ["Google API Key", config.google_api_key],
+                      ["Phoenix API Key", config.phoenix_api_key],
+                      [
+                        "Repeated Failure Threshold (count)",
+                        config.repeated_failure_count,
+                      ],
+                      [
+                        "Repeated Failure Threshold (rate)",
+                        config.repeated_failure_rate,
+                      ],
+                      [
+                        "Critical Failure Immediate",
+                        String(config.critical_failure_immediate),
+                      ],
+                      ["Cooldown (minutes)", config.cooldown_minutes],
+                      [
+                        "Release Score Threshold",
+                        config.release_score_threshold,
+                      ],
+                      ["Latency Budget (ms)", config.latency_budget_ms],
+                      ["Agent Name", config.agent_name],
+                      ["Agent Version", config.agent_version],
+                      [
+                        "Active Prompt Version",
+                        config.active_prompt_version ?? "(none)",
+                      ],
+                    ] as Array<[string, string | number]>
+                  ).map(([k, v]) => (
+                    <TableRow key={k}>
+                      <TableCell className="font-medium text-sm">{k}</TableCell>
+                      <TableCell className="font-mono text-sm text-muted-foreground">
+                        {String(v)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <p className="p-4 text-sm text-muted-foreground">
+                Loading config…
+              </p>
+            )}
           </CardContent>
         </Card>
       </motion.section>

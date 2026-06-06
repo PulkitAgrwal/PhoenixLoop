@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useEffect, useState, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useSearchParams } from "next/navigation";
+import { motion } from "framer-motion";
 import {
   CheckCircle2,
   XCircle,
@@ -14,7 +15,6 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 
-import { PageHeader } from "@/components/layout/page-header";
 import { StatCard } from "@/components/shared/stat-card";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
@@ -39,7 +39,6 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 
 import { api } from "@/lib/api";
@@ -235,8 +234,15 @@ function RunDetailPanel({
   runRow: RunRow;
   onClose: () => void;
 }) {
-  const [selectedSpan, setSelectedSpan] = useState<ToolCallRecord | null>(null);
+  const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null);
   const toolCalls: ToolCallRecord[] = runRow.run.tool_calls_json ?? [];
+
+  const handleSelectSpan = (
+    _tc: ToolCallRecord | null,
+    syntheticId: string | null,
+  ) => {
+    setSelectedSpanId(syntheticId);
+  };
 
   return (
     <motion.div
@@ -250,9 +256,8 @@ function RunDetailPanel({
       <SessionSummary run={runRow.run} evals={runRow.evals} />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {/* Waterfall + span detail (left 2/3) */}
-        <div className="space-y-4 lg:col-span-2">
-          {/* Trace Waterfall */}
+        {/* Trace Waterfall with inline span detail (left 2/3) */}
+        <div className="lg:col-span-2">
           <Card>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
@@ -262,7 +267,8 @@ function RunDetailPanel({
                   </CardTitle>
                   <CardDescription className="text-xs mt-0.5">
                     {toolCalls.length} tool calls · total{" "}
-                    {formatLatency(runRow.run.latency_ms)}
+                    {formatLatency(runRow.run.latency_ms)} · click a row to
+                    inspect
                   </CardDescription>
                 </div>
                 <Button
@@ -276,34 +282,17 @@ function RunDetailPanel({
               </div>
             </CardHeader>
             <CardContent>
-              <ScrollArea className="max-h-72 pr-2">
-                <TraceWaterfall
-                  toolCalls={toolCalls}
-                  totalLatencyMs={runRow.run.latency_ms ?? 0}
-                  onSelectSpan={setSelectedSpan}
-                  selectedSpanId={selectedSpan?.span_id ?? null}
-                />
-              </ScrollArea>
+              <TraceWaterfall
+                toolCalls={toolCalls}
+                totalLatencyMs={runRow.run.latency_ms ?? 0}
+                onSelectSpan={handleSelectSpan}
+                selectedSpanId={selectedSpanId}
+                renderSelectedDetail={(tc) => (
+                  <SpanDetail toolCall={tc} evalResults={runRow.evals} />
+                )}
+              />
             </CardContent>
           </Card>
-
-          {/* Span detail (shown when a span is selected) */}
-          <AnimatePresence>
-            {selectedSpan && (
-              <motion.div
-                key={selectedSpan.span_id ?? selectedSpan.tool_name}
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.2 }}
-              >
-                <SpanDetail
-                  toolCall={selectedSpan}
-                  evalResults={runRow.evals}
-                />
-              </motion.div>
-            )}
-          </AnimatePresence>
         </div>
 
         {/* Eval results grid (right 1/3) */}
@@ -341,6 +330,8 @@ export default function TracesPage() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [loadingEvals, setLoadingEvals] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const searchParams = useSearchParams();
+  const requestedRunId = searchParams?.get("run_id") ?? null;
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -379,24 +370,22 @@ export default function TracesPage() {
         );
         if (!detailRes.ok || !detailRes.data) continue;
 
+        // /api/conversations/{id} wraps each run as
+        // { agent_run, eval_results, triggers_created } — unwrap and reuse
+        // the embedded eval_results instead of refetching.
         const detail = detailRes.data as {
           session?: ConversationSession;
-          runs?: AgentRun[];
+          runs?: Array<{
+            agent_run: AgentRun;
+            eval_results?: EvalResult[];
+            triggers_created?: number;
+          }>;
         };
 
-        const runs: AgentRun[] = detail.runs ?? [];
-        for (const run of runs) {
-          const evalsRes = await api.evals.getForRun(run.agent_run_id);
-          const evalItems =
-            evalsRes.ok && evalsRes.data
-              ? Array.isArray(evalsRes.data)
-                ? (evalsRes.data as EvalResult[])
-                : (
-                    evalsRes.data as {
-                      items?: EvalResult[];
-                    }
-                  ).items ?? []
-              : [];
+        const runs = detail.runs ?? [];
+        for (const wrapper of runs) {
+          const run = wrapper.agent_run;
+          const evalItems = wrapper.eval_results ?? [];
           rows.push({ run, session, evals: evalItems });
         }
       }
@@ -418,6 +407,24 @@ export default function TracesPage() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // When the URL has ?run_id=… and the matching run is loaded, auto-expand it
+  // and scroll it into view. Runs once per id; the user can collapse normally.
+  useEffect(() => {
+    if (!requestedRunId || runRows.length === 0) return;
+    const exists = runRows.some(
+      (r) => r.run.agent_run_id === requestedRunId,
+    );
+    if (exists && selectedRunId !== requestedRunId) {
+      setSelectedRunId(requestedRunId);
+      setTimeout(() => {
+        const row = document.querySelector(
+          `tr[data-run-id="${requestedRunId}"]`,
+        );
+        row?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 60);
+    }
+  }, [requestedRunId, runRows, selectedRunId]);
 
   // Load evals for newly selected run if not loaded
   const handleSelectRun = async (runId: string) => {
@@ -451,23 +458,19 @@ export default function TracesPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Traces & Evals"
-        description="Inspect agent runs and evaluation results"
-        actions={
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={loadData}
-            disabled={loading}
-          >
-            <RefreshCw
-              className={cn("h-4 w-4 mr-1.5", loading && "animate-spin")}
-            />
-            Refresh
-          </Button>
-        }
-      />
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={loadData}
+          disabled={loading}
+        >
+          <RefreshCw
+            className={cn("h-4 w-4 mr-1.5", loading && "animate-spin")}
+          />
+          Refresh
+        </Button>
+      </div>
 
       {/* Error state */}
       {error && (
@@ -506,7 +509,7 @@ export default function TracesPage() {
               </Button>
             </div>
           ) : (
-            <ScrollArea className="max-h-[460px]">
+            <div>
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -526,6 +529,7 @@ export default function TracesPage() {
                     return (
                       <React.Fragment key={run.agent_run_id}>
                         <motion.tr
+                          data-run-id={run.agent_run_id}
                           initial={{ opacity: 0, y: 8 }}
                           animate={{ opacity: 1, y: 0 }}
                           transition={{ delay: idx * 0.03, duration: 0.2 }}
@@ -617,7 +621,7 @@ export default function TracesPage() {
                   })}
                 </TableBody>
               </Table>
-            </ScrollArea>
+            </div>
           )}
         </CardContent>
       </Card>

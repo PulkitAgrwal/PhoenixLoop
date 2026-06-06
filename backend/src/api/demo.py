@@ -1,18 +1,24 @@
 """Demo, health, and audit API routes."""
 
+import asyncio
 import json
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 import aiosqlite
+import httpx
 from fastapi import APIRouter, Depends
 
 from src.api.dependencies import PaginationParams, get_db_session, get_request_id
+from src.config import Settings
 from src.models import (
     ApiResponse,
     AuditEvent,
+    HealthCheck,
+    HealthResponse,
     PaginatedData,
     SupportTicket,
     TicketCategory,
@@ -332,7 +338,7 @@ async def run_all_demo(
             )
             await insert_conversation_session(db, session)
 
-            agent_run = await run_agent(ticket, session_id, phoenix)
+            agent_run = await run_agent(ticket, session_id, db, phoenix)
             await insert_agent_run(db, agent_run)
 
             eval_results = await run_all_evals(agent_run, ticket, phoenix)
@@ -408,17 +414,90 @@ async def list_audit_events(
     )
 
 
+async def _probe_phoenix(settings: Settings) -> HealthCheck:
+    """Probe Phoenix Cloud via a lightweight authenticated GET."""
+    if not settings.phoenix_api_key:
+        logger.warning("Phoenix probe skipped: PHOENIX_API_KEY not set")
+        return HealthCheck(ok=False, detail="PHOENIX_API_KEY not set")
+    url = f"{settings.phoenix_base_url}/v1/annotation_configs"
+    headers = {"Authorization": f"Bearer {settings.phoenix_api_key}"}
+    start = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.get(url, headers=headers)
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        if res.status_code == 200:
+            logger.debug("Phoenix probe ok in %d ms", elapsed_ms)
+            return HealthCheck(ok=True, detail="200 OK", response_ms=elapsed_ms)
+        logger.warning("Phoenix probe HTTP %d (%d ms)", res.status_code, elapsed_ms)
+        return HealthCheck(
+            ok=False, detail=f"HTTP {res.status_code}", response_ms=elapsed_ms
+        )
+    except (httpx.HTTPError, OSError) as exc:
+        logger.warning("Phoenix probe failed: %s", exc)
+        return HealthCheck(ok=False, detail=str(exc)[:120])
+
+
+async def _probe_gemini(settings: Settings) -> HealthCheck:
+    """Probe the Gemini API via models.list."""
+    if not settings.google_api_key:
+        logger.warning("Gemini probe skipped: GOOGLE_API_KEY not set")
+        return HealthCheck(ok=False, detail="GOOGLE_API_KEY not set")
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models"
+        f"?key={settings.google_api_key}&pageSize=1"
+    )
+    start = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.get(url)
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        if res.status_code == 200:
+            logger.debug("Gemini probe ok in %d ms", elapsed_ms)
+            return HealthCheck(
+                ok=True, detail="models.list 200", response_ms=elapsed_ms
+            )
+        logger.warning("Gemini probe HTTP %d (%d ms)", res.status_code, elapsed_ms)
+        return HealthCheck(
+            ok=False, detail=f"HTTP {res.status_code}", response_ms=elapsed_ms
+        )
+    except (httpx.HTTPError, OSError) as exc:
+        logger.warning("Gemini probe failed: %s", exc)
+        return HealthCheck(ok=False, detail=str(exc)[:120])
+
+
 @router.get("/health")
 async def health_check(
     request_id: str = Depends(get_request_id),
+    db: aiosqlite.Connection = Depends(get_db_session),
 ) -> ApiResponse:
-    """Health check endpoint."""
-    return ApiResponse(
-        ok=True,
-        data={
-            "status": "healthy",
-            "service": "PhoenixLoop API",
-            "version": "0.1.0",
-        },
-        request_id=request_id,
+    """Health check endpoint with parallel probes for Phoenix and Gemini."""
+    from src.config import get_settings
+
+    settings = get_settings()
+
+    # Database check — reaching this handler proves the dependency-injected
+    # connection is open. Run a trivial query to confirm responsiveness.
+    try:
+        await db.execute("SELECT 1")
+        db_check = HealthCheck(ok=True, detail="SQLite WAL mode, reachable")
+    except aiosqlite.Error as exc:
+        logger.error("Database probe failed: %s", exc)
+        db_check = HealthCheck(ok=False, detail=str(exc)[:120])
+
+    phoenix_check, gemini_check = await asyncio.gather(
+        _probe_phoenix(settings), _probe_gemini(settings)
     )
+
+    all_ok = all([db_check.ok, phoenix_check.ok, gemini_check.ok])
+    response = HealthResponse(
+        status="healthy" if all_ok else "degraded",
+        service="phoenixloop",
+        version="0.1.0",
+        checks={
+            "database": db_check,
+            "phoenix": phoenix_check,
+            "gemini": gemini_check,
+        },
+    )
+    return ApiResponse(ok=True, data=response, request_id=request_id)

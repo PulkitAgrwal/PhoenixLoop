@@ -176,7 +176,38 @@ export interface ExperimentRecord {
   eval_summary_json: Record<string, unknown> | null;
   started_at: string | null;
   completed_at: string | null;
+  baseline_prompt_version_id: string | null;
+  candidate_prompt_version_id: string | null;
   created_at: string;
+}
+
+// Prompts (spec 0 + 0b)
+export type PromptSource = "seed" | "diagnosis_proposal" | "manual";
+
+export interface Prompt {
+  prompt_identifier: string;
+  description: string | null;
+  active_version_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PromptVersion {
+  prompt_version_id: string;
+  prompt_identifier: string;
+  version_tag: string;
+  prompt_text: string;
+  parent_version_id: string | null;
+  source: PromptSource;
+  improvement_trigger_id: string | null;
+  created_at: string;
+  metadata_json: Record<string, unknown>;
+}
+
+export interface CreatePromptVersionPayload {
+  prompt_text: string;
+  version_tag?: string;
+  description?: string;
 }
 
 export interface ReleaseGateDecision {
@@ -224,4 +255,59 @@ export interface PaginatedData<T = unknown> {
   page: number;
   page_size: number;
   has_next: boolean;
+}
+
+// Activity feed
+export type ActivityEventKind =
+  | "agent_run"
+  | "failure"
+  | "improvement_trigger"
+  | "experiment"
+  | "release_decision";
+
+export interface ActivityEvent {
+  event_id: string;
+  kind: ActivityEventKind;
+  title: string;
+  subtitle: string | null;
+  timestamp: string;
+  target_route: string | null;
+}
+
+// Health probes
+export interface HealthCheck {
+  ok: boolean;
+  detail: string;
+  response_ms?: number;
+}
+
+export interface HealthResponse {
+  status: string;
+  service: string;
+  version: string;
+  checks: {
+    database: HealthCheck;
+    phoenix: HealthCheck;
+    gemini: HealthCheck;
+  };
+}
+
+// Config dump
+export interface ConfigResponse {
+  app_env: string;
+  database_url: string;
+  gemini_model: string;
+  google_api_key: string;
+  phoenix_base_url: string;
+  phoenix_api_key: string;
+  phoenix_project_name: string;
+  repeated_failure_count: number;
+  repeated_failure_rate: number;
+  critical_failure_immediate: boolean;
+  cooldown_minutes: number;
+  release_score_threshold: number;
+  latency_budget_ms: number;
+  agent_name: string;
+  agent_version: string;
+  active_prompt_version: string | null;
 }

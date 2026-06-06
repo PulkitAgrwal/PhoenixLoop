@@ -96,7 +96,7 @@ export function EvidenceCard({ exampleRunIds, failureKey }: EvidenceCardProps) {
 function RunIdLink({ runId }: { runId: string }) {
   return (
     <a
-      href={`/traces?run_id=${runId}`}
+      href={`/activity/runs?run_id=${runId}`}
       className={cn(
         "flex items-center gap-2 rounded-md px-3 py-2 text-xs font-mono",
         "border border-border bg-muted/40 hover:bg-muted transition-colors",

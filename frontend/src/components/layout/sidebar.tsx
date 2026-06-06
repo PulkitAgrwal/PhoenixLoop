@@ -6,10 +6,8 @@ import {
   LayoutDashboard,
   MessageSquare,
   Activity,
-  AlertTriangle,
   Wrench,
-  FlaskConical,
-  ShieldCheck,
+  FileText,
   Settings,
   Menu,
   Flame,
@@ -21,11 +19,9 @@ import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 const navItems = [
   { href: "/", label: "Home", icon: LayoutDashboard },
   { href: "/conversation", label: "Conversation", icon: MessageSquare },
-  { href: "/traces", label: "Traces & Evals", icon: Activity },
-  { href: "/failures", label: "Failure Trends", icon: AlertTriangle },
-  { href: "/improvements", label: "Improvements", icon: Wrench },
-  { href: "/experiments", label: "Experiments", icon: FlaskConical },
-  { href: "/release-gate", label: "Release Gate", icon: ShieldCheck },
+  { href: "/activity", label: "Activity", icon: Activity },
+  { href: "/healing", label: "Healing", icon: Wrench },
+  { href: "/prompts", label: "Prompts", icon: FileText },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

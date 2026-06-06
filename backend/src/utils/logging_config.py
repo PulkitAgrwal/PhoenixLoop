@@ -26,3 +26,14 @@ def setup_logging(app_env: str = "development") -> None:
     root.setLevel(level)
     if not root.handlers:
         root.addHandler(handler)
+
+    # Silence verbose DEBUG traces from third-party libraries. Each aiosqlite op
+    # logs start+complete, and httpcore logs every TCP/TLS lifecycle step — they
+    # drown the application's own logs when the root level is DEBUG.
+    for noisy in ("aiosqlite", "httpcore", "httpx", "urllib3"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+    # Google ADK and google-genai emit the full LLM request + response payload
+    # at DEBUG level on every turn. Useful for one-off agent debugging but
+    # overwhelming during normal runs — pin them at INFO.
+    for verbose_sdk in ("google_adk", "google_genai", "google.adk", "google.genai"):
+        logging.getLogger(verbose_sdk).setLevel(logging.INFO)

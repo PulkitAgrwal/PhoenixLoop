@@ -4,12 +4,15 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import google.genai as genai
 import pandas as pd
 from google.genai import types
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    import aiosqlite
 
 from src.config import get_settings
 from src.diagnosis.phoenix_mcp import (
@@ -18,7 +21,13 @@ from src.diagnosis.phoenix_mcp import (
     TagResult,
     UpsertResult,
 )
-from src.models import ImprovementTrigger, PatchType, RegressionExample
+from src.models import (
+    ImprovementTrigger,
+    PatchType,
+    PromptSource,
+    PromptVersion,
+    RegressionExample,
+)
 from src.utils.retry import retry
 
 logger = logging.getLogger(__name__)
@@ -151,7 +160,7 @@ async def _call_gemini_patch(prompt_text: str) -> PatchProposal:
     settings = get_settings()
     client = genai.Client(api_key=settings.google_api_key)
     response = client.models.generate_content(
-        model="gemini-2.0-flash",
+        model=settings.gemini_model,
         contents=prompt_text,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
@@ -174,7 +183,7 @@ async def _call_gemini_regression(prompt_text: str) -> list[RegressionTicket]:
     settings = get_settings()
     client = genai.Client(api_key=settings.google_api_key)
     response = client.models.generate_content(
-        model="gemini-2.0-flash",
+        model=settings.gemini_model,
         contents=prompt_text,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
@@ -238,6 +247,8 @@ async def generate_proposal(
     trigger: ImprovementTrigger,
     diagnosis: dict,
     mcp_client: MCPWriteProtocol,
+    current_prompt: str | None = None,
+    db: "aiosqlite.Connection | None" = None,
 ) -> dict:
     """Generate a narrow prompt patch proposal.
 
@@ -248,14 +259,22 @@ async def generate_proposal(
         trigger: The improvement trigger.
         diagnosis: Structured diagnosis from root_cause.diagnose().
         mcp_client: PhoenixMCPClient for reading/writing prompts.
+        current_prompt: Pre-resolved production prompt text. When provided,
+            skips the Phoenix prompt lookup — preferred path post-spec-0
+            where the local DB is the source of truth.
+        db: Optional DB handle. When provided, the generated candidate text
+            is also persisted as a ``prompt_versions`` row (source=
+            ``diagnosis_proposal``) so the release-gate approval flow can
+            promote it locally without round-tripping through Phoenix.
 
     Returns:
         Patch proposal dict with keys: patch_type, proposed_change,
-        diff_summary, insertion_point, and optionally candidate_prompt_version.
+        diff_summary, insertion_point, original_text, proposed_text, and
+        optionally candidate_prompt_version, local_prompt_version_id.
     """
-    # Read current prompt
-    prompt_info = await mcp_client.read_production_prompt()
-    current_prompt = prompt_info.template if prompt_info else ""
+    if current_prompt is None:
+        prompt_info = await mcp_client.read_production_prompt()
+        current_prompt = prompt_info.template if prompt_info else ""
     if not current_prompt:
         current_prompt = ""
 
@@ -270,9 +289,48 @@ async def generate_proposal(
 
         # Create candidate prompt version via MCP
         new_prompt_text = _apply_patch(current_prompt, proposal)
+        # Surface before/after text so the frontend PromptDiff renderer can
+        # show an actual side-by-side comparison.
+        result["original_text"] = current_prompt
+        result["proposed_text"] = new_prompt_text
+
+        # Persist the candidate as a local prompt_version so the release-gate
+        # flow has a real FK to flip ``prompts.active_version_id`` to.
+        if db is not None:
+            from src.db import (
+                get_prompt as db_get_prompt,
+            )
+            from src.db import (
+                insert_prompt_version,
+            )
+
+            now = datetime.now(timezone.utc).isoformat()
+            parent_prompt = await db_get_prompt(db, "support-agent")
+            local_version = PromptVersion(
+                prompt_version_id=str(uuid.uuid4()),
+                prompt_identifier="support-agent",
+                version_tag=(
+                    f"diagnosis-{trigger.improvement_trigger_id[:8]}-"
+                    f"{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+                ),
+                prompt_text=new_prompt_text,
+                parent_version_id=(
+                    parent_prompt.active_version_id if parent_prompt else None
+                ),
+                source=PromptSource.DIAGNOSIS_PROPOSAL,
+                improvement_trigger_id=trigger.improvement_trigger_id,
+                created_at=now,
+                metadata_json={
+                    "patch_type": proposal.patch_type,
+                    "diff_summary": proposal.diff_summary,
+                },
+            )
+            await insert_prompt_version(db, local_version)
+            result["local_prompt_version_id"] = local_version.prompt_version_id
+
         template_messages = _prompt_text_to_messages(new_prompt_text)
         version_result = await mcp_client.upsert_prompt(
-            "support-agent", template_messages, "gemini-2.0-flash"
+            "support-agent", template_messages, get_settings().gemini_model
         )
 
         if version_result and version_result.version_id:

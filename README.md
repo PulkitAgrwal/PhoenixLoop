@@ -98,31 +98,47 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ### Step 5: Seed demo data and run
 
-1. On the home page, click **"Seed Demo Data"** — this loads 68 support tickets into the database
-2. Go to **Conversation** — pick a ticket from the dropdown and click **Run Agent**
-3. Explore the other pages: **Traces & Evals**, **Failure Trends**, **Improvements**, **Experiments**, **Release Gate**
+1. On the **Home** page, the seed demo tickets load on first boot. If you ever wipe the DB, restart uvicorn and the schema + base prompt re-seed automatically; tickets re-seed via `curl -X POST http://localhost:8000/api/demo/seed`.
+2. Go to **Conversation** — pick a ticket and click **Run Agent**.
+3. Drive the loop: open **Activity → Runs** to inspect what the agent did, open **Healing → Improvements** to analyze recurring failures, then **Healing → Experiments** and **Healing → Release Gate** to promote a candidate prompt. The **Prompts** page lets you edit the active prompt directly and route the edit through an experiment.
 
 You can also seed and run via the API directly:
 
 ```bash
-# Seed demo tickets
+# Seed demo tickets (idempotent)
 curl -X POST http://localhost:8000/api/demo/seed
 
-# Run agent on first 5 tickets
+# Run agent on all seed tickets
 curl -X POST http://localhost:8000/api/demo/run-all
 
 # Check health
 curl http://localhost:8000/api/health
 ```
 
+### Page guide
+
+The sidebar consolidates to 6 entries; some are tab containers.
+
+| Sidebar | Sub-tabs / contents |
+|---|---|
+| **Home** | Recent Activity feed (fed by `/api/activity`) + System Health cards (live `/api/health`) |
+| **Conversation** | Chat-style ticket runner |
+| **Activity** | `Runs` (agent runs table → expanding trace waterfall with inline span detail) · `Failure Trends` |
+| **Healing** | `Improvements` (trigger list → diagnosis / prompt diff / regression tests) · `Experiments` (score comparison + collapsible Prompt Changes diff + regression results) · `Release Gate` (decision list + promotion criteria + approval card) |
+| **Prompts** | Master-detail version list. Click the active version → **Edit** opens a modal with Edited / Original / Diff tabs. Save routes through a confirmation dialog: "Save as draft" or "Save and run experiment" (recommended). No promote-immediately path. |
+| **Settings** | Configuration table (from `/api/config`, secrets shown as `<configured>` / `<missing>`) + per-service Connection cards |
+
 ### Useful URLs
 
 | URL | What |
 |---|---|
-| [localhost:3000](http://localhost:3000) | Frontend dashboard |
+| [localhost:3000](http://localhost:3000) | Frontend dashboard (Home) |
+| [localhost:3000/prompts](http://localhost:3000/prompts) | Prompt editor + version history |
+| [localhost:3000/healing/experiments](http://localhost:3000/healing/experiments) | Experiments + prompt diff |
+| [localhost:3000/healing/release-gate](http://localhost:3000/healing/release-gate) | Release gate + approval |
 | [localhost:8000/docs](http://localhost:8000/docs) | Swagger UI (auto-generated, always up to date) |
 | [localhost:8000/redoc](http://localhost:8000/redoc) | ReDoc API reference |
-| [localhost:8000/api/health](http://localhost:8000/api/health) | Health check endpoint |
+| [localhost:8000/api/health](http://localhost:8000/api/health) | Health check (probes Phoenix + Gemini) |
 
 ### Troubleshooting
 
@@ -138,7 +154,25 @@ curl http://localhost:8000/api/health
 
 ## Architecture
 
-PhoenixLoop uses a FastAPI backend running a Google ADK agent powered by Gemini. Every agent interaction is traced through OpenInference and sent to Phoenix Cloud for storage, evaluation, and experimentation. The reliability copilot communicates with Phoenix through bidirectional MCP -- reading traces, annotations, and prompts for diagnosis, and writing back candidate prompts, tags, and dataset examples for repair. Workflow state is tracked in a local SQLite database. The frontend is a Next.js application built with shadcn/ui that provides a dashboard for support conversations, the self-healing loop status, and human approval gates.
+PhoenixLoop is a FastAPI backend running a Google ADK agent powered by Gemini, paired with a Next.js dashboard. Two stores collaborate, with one clear invariant: **the local SQLite database is canonical for everything on the agent's hot path** — including the production prompt itself — while Phoenix Cloud is the observability surface and the experiment runtime.
+
+```
+Browser ──▶ FastAPI ──▶ SQLite  (prompts, prompt_versions, agent_runs, evals,
+              │                  failure_aggregates, improvement_triggers,
+              │                  experiments, release_gate_decisions, …)
+              │
+              ├──▶ Google ADK agent (Gemini 2.5 Flash) ──▶ OTEL traces ──▶ Phoenix
+              │
+              └──▶ Phoenix MCP    (read traces/annotations/prompts for diagnosis;
+                                   write candidate prompt mirror + tags;
+                                   add dataset examples)
+```
+
+The self-healing loop is FK-linked end to end so every step is auditable: an agent run records `prompt_version_id`; an analysis produces a `diagnosis_proposal` prompt version FK'd to the trigger; an experiment carries both `baseline_prompt_version_id` and `candidate_prompt_version_id`; release-gate approval flips `prompts.active_version_id` to the candidate so the next run picks it up immediately — no Phoenix round-trip required.
+
+The frontend collapses to six sidebar entries (`Home / Conversation / Activity / Healing / Prompts / Settings`) and gates every prompt change through evaluation — the Prompts page can save a draft or save-and-launch-experiment, but never "promote immediately."
+
+For the full design (data models, every API contract, the source-of-truth boundary table, deployment choices) see **[PRD.md](./PRD.md) §9 Architecture**.
 
 ---
 

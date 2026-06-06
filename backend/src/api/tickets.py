@@ -94,7 +94,7 @@ async def run_ticket(
     await insert_conversation_session(db, session)
 
     # Run agent
-    agent_run = await run_agent(ticket, session_id, phoenix)
+    agent_run = await run_agent(ticket, session_id, db, phoenix)
     await insert_agent_run(db, agent_run)
 
     # Run evals

@@ -1,3 +1,5 @@
+import type { CreatePromptVersionPayload } from "@/lib/types";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 async function fetchApi<T>(
@@ -71,5 +73,31 @@ export const api = {
   demo: {
     seed: () => fetchApi("/api/demo/seed", { method: "POST" }),
     runAll: () => fetchApi("/api/demo/run-all", { method: "POST" }),
+  },
+  activity: {
+    list: (limit = 5) => fetchApi(`/api/activity?limit=${limit}`),
+  },
+  config: {
+    get: () => fetchApi("/api/config"),
+  },
+  health: {
+    check: () => fetchApi("/api/health"),
+  },
+  prompts: {
+    list: () => fetchApi("/api/prompts"),
+    get: (id: string) => fetchApi(`/api/prompts/${id}`),
+    listVersions: (id: string) =>
+      fetchApi(`/api/prompts/${id}/versions?page_size=200`),
+    getVersion: (id: string, versionId: string) =>
+      fetchApi(`/api/prompts/${id}/versions/${versionId}`),
+    createVersion: (id: string, payload: CreatePromptVersionPayload) =>
+      fetchApi(`/api/prompts/${id}/versions`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    launchExperiment: (id: string, versionId: string) =>
+      fetchApi(`/api/prompts/${id}/versions/${versionId}/actions/experiment`, {
+        method: "POST",
+      }),
   },
 };

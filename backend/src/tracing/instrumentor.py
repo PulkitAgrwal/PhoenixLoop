@@ -32,12 +32,12 @@ def setup_instrumentation() -> None:
         from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
         # Configure OTLP/HTTP exporter to Phoenix Cloud collector.
-        # Phoenix Cloud expects the api_key header for authentication.
+        # Phoenix Cloud authenticates OTLP requests with an Authorization Bearer header.
         endpoint = f"{settings.phoenix_collector_endpoint}/v1/traces"
         exporter = OTLPSpanExporter(
             endpoint=endpoint,
             headers={
-                "api_key": settings.phoenix_api_key,
+                "Authorization": f"Bearer {settings.phoenix_api_key}",
             },
         )
 

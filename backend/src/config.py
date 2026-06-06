@@ -1,13 +1,16 @@
 """Application configuration loaded from environment variables."""
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_PROJECT_ROOT_ENV = Path(__file__).resolve().parent.parent.parent / ".env"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=("../../.env", ".env"),
+        env_file=str(_PROJECT_ROOT_ENV),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -15,6 +18,7 @@ class Settings(BaseSettings):
     # Google / Gemini
     google_api_key: str = ""
     google_genai_use_vertexai: bool = False
+    gemini_model: str = "gemini-2.5-flash"
 
     # Arize Phoenix Cloud
     phoenix_api_key: str = ""

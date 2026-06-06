@@ -9,7 +9,6 @@ import {
   Activity,
   ArrowRight,
 } from "lucide-react";
-import { PageHeader } from "@/components/layout/page-header";
 import { StatCard } from "@/components/shared/stat-card";
 import { ChartSkeleton, TableSkeleton } from "@/components/shared/loading-skeleton";
 import { FailureChart } from "@/components/failures/failure-chart";
@@ -86,7 +85,7 @@ export default function FailuresPage() {
           result.error ?? "Failed to create improvement trigger."
         );
       } else {
-        router.push("/improvements");
+        router.push("/healing/improvements");
       }
     } catch {
       setDiagnoseError("Could not reach the backend.");
@@ -106,12 +105,6 @@ export default function FailuresPage() {
 
   return (
     <div className="space-y-8">
-      {/* Page Header */}
-      <PageHeader
-        title="Failure Trends"
-        description="Track failure patterns and threshold breaches"
-      />
-
       {/* Stats Row */}
       <motion.section
         custom={0}

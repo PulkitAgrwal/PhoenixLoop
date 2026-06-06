@@ -10,12 +10,12 @@ import {
   FlaskConical,
   RefreshCw,
 } from "lucide-react";
-import { PageHeader } from "@/components/layout/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { ScoreComparison } from "@/components/experiments/score-comparison";
 import { EvalBarChart } from "@/components/experiments/eval-bar-chart";
 import { RegressionResults } from "@/components/experiments/regression-results";
+import { PromptChangesSection } from "@/components/experiments/prompt-changes-section";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -140,9 +140,16 @@ function VerdictBadge({ decision }: VerdictBadgeProps) {
 interface ExperimentDetailProps {
   experiment: ExperimentRecord;
   releaseGate: ReleaseGateDecision | null;
+  baselinePromptText: string | null;
+  candidatePromptText: string | null;
 }
 
-function ExperimentDetail({ experiment, releaseGate }: ExperimentDetailProps) {
+function ExperimentDetail({
+  experiment,
+  releaseGate,
+  baselinePromptText,
+  candidatePromptText,
+}: ExperimentDetailProps) {
   const router = useRouter();
 
   return (
@@ -172,6 +179,14 @@ function ExperimentDetail({ experiment, releaseGate }: ExperimentDetailProps) {
       {/* Score Comparison */}
       <ScoreComparison experiment={experiment} />
 
+      {/* Prompt Changes (collapsible diff between baseline and candidate) */}
+      <PromptChangesSection
+        baseline={baselinePromptText}
+        candidate={candidatePromptText}
+        baselineVersion={experiment.baseline_prompt_version}
+        candidateVersion={experiment.candidate_prompt_version}
+      />
+
       <Separator />
 
       {/* Bar Chart */}
@@ -191,7 +206,7 @@ function ExperimentDetail({ experiment, releaseGate }: ExperimentDetailProps) {
           size="sm"
           variant="outline"
           className="gap-2"
-          onClick={() => router.push("/release-gate")}
+          onClick={() => router.push("/healing/release-gate")}
         >
           View Release Gate
           <ArrowRight className="h-3.5 w-3.5" />
@@ -206,6 +221,8 @@ function ExperimentDetail({ experiment, releaseGate }: ExperimentDetailProps) {
 interface ExperimentDetailData {
   experiment: ExperimentRecord;
   release_gate_decision: ReleaseGateDecision | null;
+  baseline_prompt_text: string | null;
+  candidate_prompt_text: string | null;
 }
 
 export default function ExperimentsPage() {
@@ -275,21 +292,17 @@ export default function ExperimentsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Experiment Results"
-        description="Compare baseline vs candidate prompt performance"
-        actions={
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleRefresh}
-            className="gap-2"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            Refresh
-          </Button>
-        }
-      />
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleRefresh}
+          className="gap-2"
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+          Refresh
+        </Button>
+      </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[400px_1fr]">
         {/* ── Left: Experiments List ── */}
@@ -318,7 +331,7 @@ export default function ExperimentsPage() {
               <p className="mt-1 text-xs text-muted-foreground">
                 Create one from the{" "}
                 <Link
-                  href="/improvements"
+                  href="/healing/improvements"
                   className="text-primary underline-offset-4 hover:underline"
                 >
                   Improvements
@@ -483,6 +496,8 @@ export default function ExperimentsPage() {
                 <ExperimentDetail
                   experiment={selectedDetail.experiment}
                   releaseGate={selectedDetail.release_gate_decision}
+                  baselinePromptText={selectedDetail.baseline_prompt_text}
+                  candidatePromptText={selectedDetail.candidate_prompt_text}
                 />
               </motion.div>
             ) : null}

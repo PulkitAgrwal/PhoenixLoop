@@ -12,7 +12,6 @@ import {
   RefreshCw,
   Zap,
 } from "lucide-react";
-import { PageHeader } from "@/components/layout/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { EvidenceCard } from "@/components/improvements/evidence-card";
@@ -32,7 +31,7 @@ import {
 } from "@/components/ui/table";
 import { Separator } from "@/components/ui/separator";
 import { api } from "@/lib/api";
-import { ImprovementTrigger, TriggerReason } from "@/lib/types";
+import { FailureAggregate, ImprovementTrigger, TriggerReason } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -196,10 +195,18 @@ function TriggerDetail({ trigger, onRefresh }: TriggerDetailProps) {
   const [runningId, setRunningId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const canAnalyze = trigger.diagnosis_json == null;
+  // The backend persists empty diagnosis/regression containers as ``{}`` and
+  // ``[]`` rather than null, so test for emptiness too.
+  const hasDiagnosis =
+    trigger.diagnosis_json != null &&
+    Object.keys(trigger.diagnosis_json).length > 0;
+  // Analyze is always available — re-running overwrites the diagnosis and
+  // proposal. Useful when the prompt/data has changed since the first run.
+  const canAnalyze = true;
   const canGenerateRegressions =
-    trigger.regression_examples_json == null ||
-    trigger.regression_examples_json.length === 0;
+    hasDiagnosis &&
+    (trigger.regression_examples_json == null ||
+      trigger.regression_examples_json.length === 0);
   const canRunExperiment =
     trigger.status !== "experiment_complete" && trigger.status !== "closed";
 
@@ -249,7 +256,7 @@ function TriggerDetail({ trigger, onRefresh }: TriggerDetailProps) {
       if (!res.ok) {
         setActionError(res.error ?? "Experiment run failed");
       } else {
-        router.push("/experiments");
+        router.push("/healing/experiments");
       }
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Unexpected error");
@@ -274,7 +281,11 @@ function TriggerDetail({ trigger, onRefresh }: TriggerDetailProps) {
             ) : (
               <Brain className="h-3.5 w-3.5" />
             )}
-            {analyzingId != null ? "Analyzing…" : "Analyze"}
+            {analyzingId != null
+              ? "Analyzing…"
+              : hasDiagnosis
+                ? "Re-analyze"
+                : "Analyze"}
           </Button>
         )}
         {canGenerateRegressions && (
@@ -371,6 +382,11 @@ function TriggerDetail({ trigger, onRefresh }: TriggerDetailProps) {
 
 export default function ImprovementsPage() {
   const [triggers, setTriggers] = useState<ImprovementTrigger[]>([]);
+  // Keyed by failure_key — used to render live occurrence counts on each
+  // trigger card so new failing runs are visible without re-creating triggers.
+  const [failuresByKey, setFailuresByKey] = useState<
+    Record<string, FailureAggregate>
+  >({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedTrigger, setSelectedTrigger] =
     useState<ImprovementTrigger | null>(null);
@@ -378,17 +394,37 @@ export default function ImprovementsPage() {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
 
-  // Load list
+  // Load list (triggers + failure aggregates in parallel)
   const loadList = useCallback(async () => {
     setListError(null);
     setLoadingList(true);
     try {
-      const res = await api.improvements.list();
-      if (res.ok && res.data) {
-        const raw = res.data as ImprovementTrigger[] | { items: ImprovementTrigger[] };
-        setTriggers(Array.isArray(raw) ? raw : (raw as { items: ImprovementTrigger[] }).items ?? []);
+      const [tRes, fRes] = await Promise.all([
+        api.improvements.list(),
+        api.evals.getFailures(false),
+      ]);
+      if (tRes.ok && tRes.data) {
+        const raw = tRes.data as
+          | ImprovementTrigger[]
+          | { items: ImprovementTrigger[] };
+        setTriggers(
+          Array.isArray(raw)
+            ? raw
+            : (raw as { items: ImprovementTrigger[] }).items ?? [],
+        );
       } else {
-        setListError(res.error ?? "Failed to load improvement triggers");
+        setListError(tRes.error ?? "Failed to load improvement triggers");
+      }
+      if (fRes.ok && fRes.data) {
+        const fraw = fRes.data as
+          | FailureAggregate[]
+          | { items: FailureAggregate[] };
+        const items = Array.isArray(fraw)
+          ? fraw
+          : (fraw as { items: FailureAggregate[] }).items ?? [];
+        const byKey: Record<string, FailureAggregate> = {};
+        for (const f of items) byKey[f.failure_key] = f;
+        setFailuresByKey(byKey);
       }
     } catch (e) {
       setListError(e instanceof Error ? e.message : "Unexpected error");
@@ -408,7 +444,16 @@ export default function ImprovementsPage() {
       try {
         const res = await api.improvements.get(id);
         if (res.ok && res.data) {
-          setSelectedTrigger(res.data as ImprovementTrigger);
+          // GET /api/improvements/{id} wraps the trigger as
+          // { trigger, regression_examples }; unwrap to the trigger object.
+          const raw = res.data as
+            | ImprovementTrigger
+            | { trigger: ImprovementTrigger };
+          const trigger =
+            "trigger" in raw && raw.trigger
+              ? raw.trigger
+              : (raw as ImprovementTrigger);
+          setSelectedTrigger(trigger);
         }
       } catch {
         // Silently fall back to list data
@@ -433,16 +478,12 @@ export default function ImprovementsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Improvement Proposals"
-        description="Root cause analysis and prompt repair suggestions"
-        actions={
-          <Button variant="outline" size="sm" onClick={handleRefresh} className="gap-2">
-            <RefreshCw className="h-3.5 w-3.5" />
-            Refresh
-          </Button>
-        }
-      />
+      <div className="flex justify-end">
+        <Button variant="outline" size="sm" onClick={handleRefresh} className="gap-2">
+          <RefreshCw className="h-3.5 w-3.5" />
+          Refresh
+        </Button>
+      </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[380px_1fr]">
         {/* ── Left: Triggers List ── */}
@@ -470,7 +511,7 @@ export default function ImprovementsPage() {
               <p className="mt-1 text-xs text-muted-foreground">
                 Failures crossing threshold will appear here.{" "}
                 <a
-                  href="/failures"
+                  href="/activity/failures"
                   className="text-primary underline-offset-4 hover:underline"
                 >
                   View failures
@@ -524,9 +565,27 @@ export default function ImprovementsPage() {
                         </p>
                       </TableCell>
                       <TableCell className="py-3 text-right">
-                        <Badge variant="secondary" className="text-xs">
-                          {t.occurrence_count}
-                        </Badge>
+                        {(() => {
+                          const live = failuresByKey[t.failure_key];
+                          const liveCount =
+                            live?.occurrence_count ?? t.occurrence_count;
+                          const delta = liveCount - t.occurrence_count;
+                          return (
+                            <div className="flex flex-col items-end gap-0.5">
+                              <Badge variant="secondary" className="text-xs">
+                                {liveCount}
+                              </Badge>
+                              {delta > 0 && (
+                                <span
+                                  className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400"
+                                  title={`+${delta} new occurrence${delta === 1 ? "" : "s"} since trigger created`}
+                                >
+                                  +{delta} new
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </TableCell>
                     </motion.tr>
                   ))}

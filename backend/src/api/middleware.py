@@ -5,6 +5,7 @@ import uuid
 from contextvars import ContextVar
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -49,6 +50,20 @@ def _error_response(status: int, error: str, request_id: str) -> JSONResponse:
 
 def register_exception_handlers(app: FastAPI) -> None:
     """Register domain-specific and fallback exception handlers on the app."""
+
+    @app.exception_handler(RequestValidationError)
+    async def handle_validation(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        rid = request_id_var.get("")
+        # Surface the first field/message pair so callers get a focused error
+        # rather than the full pydantic dump. The full detail still hits logs.
+        first = exc.errors()[0] if exc.errors() else {}
+        loc = ".".join(str(p) for p in first.get("loc", []) if p != "body")
+        msg = first.get("msg", "validation error")
+        summary = f"{loc}: {msg}" if loc else msg
+        logger.warning("Validation error: %s", exc.errors())
+        return _error_response(400, summary, rid)
 
     @app.exception_handler(IdempotencyConflictError)
     async def handle_idempotency(

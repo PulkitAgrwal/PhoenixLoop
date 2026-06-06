@@ -3,10 +3,14 @@
 import logging
 from typing import List, Optional
 
+import httpx
 from phoenix.client import Client
 from phoenix.client.resources.spans import SpanAnnotationData
 
 logger = logging.getLogger(__name__)
+
+_ANNOTATION_CONFIGS_PATH = "/v1/annotation_configs"
+_HTTP_TIMEOUT_SECONDS = 10.0
 
 # All 14 annotation names (one per evaluator).
 ANNOTATION_NAMES: List[str] = [
@@ -28,6 +32,98 @@ ANNOTATION_NAMES: List[str] = [
     "tool_invocation",
     "tool_response_handling",
 ]
+
+
+def _existing_annotation_config_names(base_url: str, api_key: str) -> set[str]:
+    """Fetch the set of annotation-config names already registered with Phoenix.
+
+    Returns an empty set on any error so the caller will optimistically attempt
+    to create every config and rely on Phoenix to reject duplicates.
+    """
+    try:
+        response = httpx.get(
+            f"{base_url}{_ANNOTATION_CONFIGS_PATH}",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=_HTTP_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        logger.warning("Could not list existing annotation configs: %s", exc)
+        return set()
+
+    body = response.json()
+    return {item["name"] for item in body.get("data", []) if "name" in item}
+
+
+def register_annotation_configs(client: Optional[Client]) -> None:
+    """Register PhoenixLoop's 14 evaluator annotation configs on Phoenix.
+
+    Each evaluator emits a categorical pass/fail label with a 0.0/1.0 score,
+    optimized in the MAXIMIZE direction (higher score is better). Existing
+    configs are skipped, making this safe to call on every startup.
+
+    Phoenix's Python SDK (arize-phoenix-client) does not expose annotation-config
+    CRUD, so this calls the REST endpoint POST /v1/annotation_configs directly.
+    """
+    if client is None:
+        return
+
+    from src.config import get_settings
+
+    settings = get_settings()
+    base_url = settings.phoenix_base_url
+    api_key = settings.phoenix_api_key
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    existing = _existing_annotation_config_names(base_url, api_key)
+
+    created = 0
+    skipped = 0
+    failed = 0
+
+    for name in ANNOTATION_NAMES:
+        if name in existing:
+            skipped += 1
+            continue
+
+        payload = {
+            "data": {
+                "type": "CATEGORICAL",
+                "name": name,
+                "optimization_direction": "MAXIMIZE",
+                "values": [
+                    {"label": "pass", "score": 1.0},
+                    {"label": "fail", "score": 0.0},
+                ],
+                "description": f"PhoenixLoop evaluator: {name}",
+            }
+        }
+
+        try:
+            response = httpx.post(
+                f"{base_url}{_ANNOTATION_CONFIGS_PATH}",
+                json=payload,
+                headers=headers,
+                timeout=_HTTP_TIMEOUT_SECONDS,
+            )
+            if response.status_code in (409, 422):
+                # Race: another process created the config between our GET and POST.
+                skipped += 1
+                continue
+            response.raise_for_status()
+            created += 1
+        except httpx.HTTPError as exc:
+            failed += 1
+            logger.warning(
+                "Failed to register annotation config %s: %s", name, exc
+            )
+
+    logger.info(
+        "Annotation configs: %d created, %d already existed, %d failed",
+        created,
+        skipped,
+        failed,
+    )
 
 
 def write_span_annotation(

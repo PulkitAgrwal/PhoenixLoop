@@ -393,58 +393,200 @@ All Gemini calls, eval runs, and experiments are live. The hosted URL runs fully
 
 ## 9. Architecture
 
-### 9.1 System diagram
+### 9.1 System diagram (as built)
 
 ```
-Browser UI (Next.js + shadcn/ui)
-│
-v
-Cloud Run — API Service (FastAPI / Python)
-│
-├── Support Agent Runtime (Google ADK + Gemini)
-│   ├── Deterministic support tools
-│   └── Synthetic AcmeFlow data (JSON fixtures)
-│
-├── OpenInference / Phoenix OTEL instrumentation
-│   └── → Phoenix Cloud (traces, spans, sessions, annotations, prompts, datasets, experiments)
-│
-├── Evaluation Service (7 LLM-based + 7 code evals = 14 total)
-│   ├── → Phoenix Evaluator Hub (7 LLM evaluators registered, versioned, traced)
-│   └── → Phoenix annotations via SDK/API (session-level + span-level)
-│
-├── Failure Aggregator (frequency counters, thresholds, critical detection)
-│
-├── Reliability Copilot
-│   ├── Phoenix MCP read path (traces, spans, annotations, prompts, experiments, datasets)
-│   ├── Phoenix MCP write path (upsert-prompt, add-prompt-version-tag, add-dataset-examples)
-│   ├── Structured diagnosis
-│   ├── Repair proposal
-│   └── Regression generation
-│
-└── Experiment Orchestrator (thin wrapper around Phoenix Experiments)
-    ├── Phoenix run_experiment() with dry_run support
-    ├── Release gate (reads results from Phoenix)
-    └── Human approval
+                 ┌──────────────────────────────────────────────────────────────┐
+                 │  Browser  —  Next.js 14 dashboard (App Router)               │
+                 │                                                              │
+                 │   Sidebar: Home · Conversation · Activity · Healing ·        │
+                 │            Prompts · Settings                                │
+                 │                                                              │
+                 │   /activity/{runs,failures}   /healing/{improvements,        │
+                 │                                experiments,release-gate}    │
+                 │   /prompts (master-detail + Edit modal w/ Diff)              │
+                 └─────────────────────────────────┬────────────────────────────┘
+                                                   │ fetch /api/*
+                                                   ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  FastAPI (uvicorn) — backend/src                                             │
+│                                                                              │
+│  api/      tickets · conversations · evals · improvements · experiments ·    │
+│            release_gate · prompts (incl. POST) · activity · config · health  │
+│  middleware  request-id, validation/domain → ApiResponse envelope (400/409…) │
+│                                                                              │
+│  agent/      support_agent.run_agent  ── Google ADK + Gemini                 │
+│              prompts.get_production_prompt(db)  ◄── reads LOCAL DB           │
+│                                                                              │
+│  evaluation/ runner + code/LLM/Phoenix-tool evaluators (14 total)            │
+│  diagnosis/  root_cause.diagnose · proposal_generator.generate_proposal      │
+│              phoenix_mcp client (read-only)                                  │
+│  experiments/ orchestrator.run_experiment · runner.create_experiment_from_   │
+│               versions (manual) · release_gate.{approve,reject}_release      │
+│  tracing/    OpenInference + Phoenix OTEL instrumentor                       │
+│                                                                              │
+└─────────┬────────────────────────────────────────────────────────┬───────────┘
+          │                                                        │
+          ▼                                                        ▼
+┌────────────────────────────────────┐         ┌──────────────────────────────┐
+│  SQLite (WAL, FK on)  ◄ canonical  │         │  Phoenix Cloud  ◄ visibility │
+│                                    │         │                              │
+│  tickets · agent_runs · evals ·    │         │  traces / spans / sessions   │
+│  failure_aggregates ·              │         │  annotations (14 evaluators) │
+│  improvement_triggers ·            │ ◄──┐    │  experiments (baseline +     │
+│  regression_examples ·             │    │    │   candidate)                 │
+│  experiments  (FK: baseline_pvid,  │    │    │  Evaluator Hub               │
+│   candidate_pvid)                  │    │    │  prompts (mirror; tags)      │
+│  release_gate_decisions ·          │    │    │  datasets                    │
+│  human_approvals · audit_events ·  │    │    │                              │
+│  prompts · prompt_versions (with   │    │    │                              │
+│   FK on agent_runs.prompt_version_ │    │    │                              │
+│   id)                              │    │    │                              │
+└────────────────────────────────────┘    │    └──────────────────────────────┘
+                                          │              ▲
+                                          │              │ MCP read (traces,
+                                          │              │ annotations, prompts)
+                                          └──────────────┘ MCP write (candidate
+                                                          prompt version tags,
+                                                          dataset examples)
 ```
 
-### 9.2 Deployment choices
+**Read this diagram top-down once, then follow these flow lines:**
+
+- **Agent run.** Browser → `POST /api/tickets/{id}/run` → `agent.run_agent` resolves the active prompt from the **local DB** (`prompts.active_version_id` → `prompt_versions.prompt_text`), runs Gemini via ADK, instruments via OTEL → Phoenix. The run row written into `agent_runs` carries `prompt_version_id` so every conversation is anchored to the exact prompt that produced it.
+- **Evaluation.** `evaluation.runner` invokes all 14 evaluators against the run, writes results to `evals` and (for LLM judges) emits annotation traces to Phoenix.
+- **Aggregation + trigger.** Failures bump `failure_aggregates` counts. Critical patterns spawn an `improvement_triggers` row immediately; non-critical ones spawn one once the threshold is crossed.
+- **Diagnose + propose.** `POST /api/improvements/{id}/actions/analyze` → `diagnose` + `generate_proposal`. The proposal generator **persists the patched candidate prompt as a `prompt_versions` row** (`source = diagnosis_proposal`, FK'd to the trigger) and returns its id on `patch_proposal_json.local_prompt_version_id`. It also calls MCP `upsert-prompt` so Phoenix has the candidate visible for experiment runs.
+- **Experiment.** `POST /api/experiments` → `orchestrator.run_experiment` reads the trigger's proposal, stamps `experiments.candidate_prompt_version_id` from the local version row and `experiments.baseline_prompt_version_id` from the currently active prompt, then runs baseline + candidate in Phoenix and writes metrics back to the local `experiments` row.
+- **Release gate.** `release_gate.check_promotion_rules` decides automatically. On `POST .../actions/approve`, `approve_release` (a) flips `release_gate_decisions.decision` to `promoted`, (b) **calls `set_active_version("support-agent", experiment.candidate_prompt_version_id)` so the local DB now points at the candidate** — the next `agent.run_agent` invocation picks it up automatically — and (c) tags the Phoenix mirror as `production` for visibility.
+- **Manual edit shortcut.** `POST /api/prompts/{id}/versions` writes a new `prompt_versions` row with `source = manual`. `POST .../actions/experiment` calls `experiments.runner.create_experiment_from_versions`, which synthesizes a placeholder `improvement_triggers` row (`trigger_reason = manual_demo_trigger`) so the existing FK is satisfied, then creates the experiment with both FK columns already populated. From there the flow rejoins the release-gate path above.
+
+### 9.2 Source-of-truth boundary
+
+The system has two stores. Knowing which is canonical for which datum is the key invariant.
+
+| Datum | Canonical store | Phoenix carries… | Why split this way |
+|---|---|---|---|
+| Active production prompt text | Local `prompts.active_version_id` → `prompt_versions` | A `production`-tagged mirror via MCP `upsert-prompt` + `add-prompt-version-tag` | The agent has to keep running when Phoenix is unreachable; reading from local SQLite removes Phoenix from the request path. |
+| Prompt version history | Local `prompt_versions` (with `source` enum, `improvement_trigger_id` FK, `parent_version_id`, `created_at`, `metadata_json`) | Phoenix-side version IDs are recorded in `experiments.{baseline,candidate}_prompt_version` as opaque strings | Phoenix's prompt object has tags but no FK back to our triggers/experiments. We need our own graph. |
+| Agent runs | Local `agent_runs` | OTEL trace + spans | Phoenix is great for trace UX; local table is needed for FKs (`evals → agent_runs`) and for the Activity/Healing UI without Phoenix round-trips. |
+| Evaluation results | Local `evals` | Annotations + Evaluator Hub traces | Hub gives recursive observability; local table makes failure aggregation cheap. |
+| Failure aggregates + triggers | Local `failure_aggregates`, `improvement_triggers` | — | Pure workflow state. |
+| Experiments | Local `experiments` row (metrics + FKs) | Phoenix experiment rows (per-example) | Phoenix runs the experiment; we record the verdict. |
+| Release gate decisions + approvals | Local `release_gate_decisions`, `human_approvals`, `audit_events` | — | Auditable, queryable, immutable. |
+| Datasets (regression cases) | Phoenix via MCP `add-dataset-examples` | Authoritative | Phoenix `run_experiment` consumes its own datasets; the local DB doesn't store dataset rows. |
+
+The single rule: **anything the agent or the healing loop reads on the hot path lives in the local DB.** Phoenix is the observability surface and the experiment runtime, not the configuration store.
+
+### 9.3 Component map (modules, in dependency order)
+
+```
+src/config.py                    Settings + .env loading
+src/exceptions.py                Domain exception hierarchy
+src/models.py                    Pydantic models + enums (32+ types)
+src/db.py                        Connection pool, schema DDL, all SQL helpers
+src/utils/retry.py               @retry decorator (exponential backoff)
+src/utils/logging_config.py      JSON / human dual-mode logging
+
+src/tracing/
+  phoenix_client.py              Phoenix client factory (singleton)
+  instrumentor.py                OpenInference ADK instrumentation
+  annotations.py                 14 annotation-config registrations
+
+src/agent/
+  tools.py                       6 deterministic support tools
+  prompts.py                     get_production_prompt(db) ◄── canonical reader
+  schemas.py                     AgentResponseContract (structured output)
+  support_agent.py               run_agent — instruments per-tool latency
+
+src/evaluation/
+  runner.py                      BaseEvaluator + dispatcher
+  code_evals/                    7 code evaluators
+  llm_judges/combined.py         4 LLM judges (one prompt → all 4 in 1 call)
+  tool_evals/combined.py         3 Phoenix tool-evaluators
+
+src/diagnosis/
+  phoenix_mcp.py                 PhoenixMCPClient (read traces/annotations/prompts)
+  root_cause.py                  diagnose(trigger, mcp, current_prompt)
+  proposal_generator.py          generate_proposal — also writes local prompt_versions row
+
+src/experiments/
+  orchestrator.py                run_experiment (auto pipeline)
+  runner.py                      create_experiment_from_versions (manual pipeline)
+  release_gate.py                check_promotion_rules, approve_release, reject_release
+
+src/api/
+  dependencies.py                get_db_session, get_request_id, pagination
+  middleware.py                  request-id + global exception handlers
+  tickets.py, conversations.py, evals.py, failures.py
+  improvements.py                analyze, generate-regressions, list/get
+  experiments.py                 list/get/create
+  release_gate.py                list/get + approve/reject
+  prompts.py                     list/get/list_versions + POST create + POST experiment
+  activity.py                    Unified timeline across all entities
+  config_api.py                  Redacted config dump
+  health.py                      Probes Phoenix + Gemini in parallel
+  demo.py                        Seed + run-all
+src/main.py                      FastAPI app, CORS, lifespan (init_db + Phoenix instrumentor)
+```
+
+### 9.4 Frontend structure
+
+```
+frontend/src/app/
+  layout.tsx                     Sidebar + main outlet
+  page.tsx                       Home — Recent Activity + System Health
+  conversation/page.tsx          Chat-style ticket interaction
+  activity/
+    layout.tsx, page.tsx         Tabs container (Runs + Failure Trends)
+    runs/page.tsx                Agent Runs table → expanding TraceWaterfall
+    failures/page.tsx            Aggregated failure trends
+  healing/
+    layout.tsx, page.tsx         Tabs container (Improvements/Experiments/Release Gate)
+    improvements/page.tsx        Trigger list + diagnosis/proposal/regression detail
+    experiments/page.tsx         Experiment list + Score/EvalBarChart/PromptChanges/Regression
+    release-gate/page.tsx        Decisions list + Score Gauge + Promotion Criteria + Approval
+  prompts/page.tsx               Master-detail + Edit modal (Edited/Original/Diff tabs)
+                                  + ConfirmSaveDialog (draft vs experiment)
+  settings/page.tsx              Configuration table + Connection cards (live health)
+
+frontend/src/components/
+  layout/                        sidebar, page-tabs, page-header
+  shared/                        stat-card, status-badge, loading-skeleton
+  traces/                        trace-waterfall, span-detail, eval-badge
+  experiments/                   score-comparison, eval-bar-chart, regression-results,
+                                  prompt-changes-section (collapsible diff)
+  release-gate/                  score-gauge (semicircle), approval-card
+  improvements/                  evidence-card, prompt-diff, root-cause-card,
+                                  regression-list, mcp-query-log
+  prompts/                       version-list, version-detail, edit-prompt-dialog,
+                                  confirm-save-dialog, prompt-diff-view,
+                                  prompt-diff-unified, prompt-diff-annotated
+  conversation/                  chat-interface, ticket-selector
+  ui/                            shadcn primitives (alert-dialog, dialog, radio-group,
+                                  label, scroll-area, tabs, tooltip, …)
+```
+
+### 9.5 Deployment choices
 
 | Component | Decision | Reason |
 |---|---|---|
-| App hosting | Google Cloud Run | Official ADK deployment path; scales; gives hosted URL |
-| Agent runtime | Google ADK + Gemini | Code-first; satisfies Arize code-owned runtime requirement |
-| Observability | Phoenix Cloud | Best demo reliability; hosted traces; no self-host ops during judging |
-| Tracing | OpenInference ADK instrumentor + Phoenix OTEL | Arize track requires OpenInference |
-| MCP | `@arizeai/phoenix-mcp@latest` pointed at Phoenix Cloud | Required for runtime introspection |
-| Durable writes (prompts, tags, datasets) | Phoenix MCP (primary) | Bidirectional MCP maximizes integration depth |
-| Durable writes (annotations, experiments, configs) | Phoenix SDK/API | MCP does not support these operations |
-| Model | Gemini via Google Cloud | Required by hackathon |
-| Database | SQLite (dev) / PostgreSQL (prod) | Entity-driven, ~11 tables |
-| Frontend | Next.js + shadcn/ui | Professional design system, dashboard-friendly, accessible components |
+| App hosting | Google Cloud Run (planned) | Official ADK deployment path; scales; gives hosted URL |
+| Agent runtime | Google ADK + Gemini 2.5 Flash (thinking_budget=512) | Code-first; thinking budget tuned for support reasoning vs. latency |
+| Observability | Phoenix Cloud | Hosted traces; recursive Evaluator Hub observability |
+| Tracing | OpenInference ADK instrumentor + Phoenix OTEL | Arize track requirement |
+| MCP | `@arizeai/phoenix-mcp@latest` (read path only at runtime) | Diagnosis evidence; not on the hot path |
+| Prompts (canonical) | **Local SQLite** (`prompts`, `prompt_versions`) | Agent independence from Phoenix availability; FK linkage to experiments and triggers |
+| Prompts (mirror) | Phoenix via MCP (`upsert-prompt`, `add-prompt-version-tag`) | Experiment runtime + visibility |
+| Annotations / Evaluator Hub | Phoenix SDK | MCP doesn't write these |
+| Experiments runtime | Phoenix `run_experiment` | MCP can't run experiments |
+| Model | Gemini via Google AI Studio (`GOOGLE_API_KEY`) | Hackathon requirement |
+| Database | SQLite WAL + foreign_keys=ON (dev) / PostgreSQL planned (prod) | 13 tables, all FK-linked |
+| Frontend | Next.js 14 (App Router) + shadcn/ui + Tailwind + Framer Motion | Dashboard-friendly, accessible primitives, motion-respecting |
 
-### 9.3 Phoenix Cloud decision
+### 9.6 Phoenix Cloud decision
 
-Use Phoenix Cloud for final demo. Reasons: reduces infrastructure risk, judges can see persistent traces, MCP config is simpler, self-hosting reserved for local dev fallback.
+Use Phoenix Cloud for the demo. Reasons: reduces infrastructure risk, judges can see persistent traces, MCP config is simpler. Self-hosting is reserved for local dev fallback (the agent works against either since it reads its prompt from the local DB).
 
 ---
 
@@ -548,12 +690,20 @@ Two dataset types:
 1. **Seed dataset** — 40-60 synthetic cases. Used as experiment corpus. Immutable after load.
 2. **Failure corpus** — Populated from real conversations that fail evals. Used by copilot for diagnosis context.
 
-### 11.5 Prompts (hybrid storage)
+### 11.5 Prompts (local canonical, Phoenix mirror)
 
-- **Prompt text and versions** stored in Phoenix for MCP accessibility and versioning.
-- **Workflow metadata** (status, linked_experiment_id, change_type, approval state) stored in local `improvement_triggers` table.
-- **Phoenix prompt tags** (`production`, `candidate`, `rejected`, `previous`) used for promotion workflow.
-- Agent always loads the prompt tagged `production`.
+The local SQLite tables `prompts` and `prompt_versions` are the source of truth — the agent reads its system prompt by joining `prompts.active_version_id` against `prompt_versions.prompt_text` on every `run_agent` invocation. Phoenix carries a tagged mirror exclusively for experiment runtime and visibility.
+
+- **`prompts` row** — one per logical prompt identity. Holds `prompt_identifier`, `description`, `active_version_id` (FK → `prompt_versions`).
+- **`prompt_versions` row** — immutable snapshot. Carries `prompt_text`, `version_tag`, `source` (`seed` / `diagnosis_proposal` / `manual`), `parent_version_id`, optional `improvement_trigger_id` FK, `metadata_json` (e.g. `{patch_type, diff_summary, description}`).
+- **`agent_runs.prompt_version_id`** — FK so every conversation is permanently anchored to the exact prompt that produced it.
+- **`experiments.{baseline,candidate}_prompt_version_id`** — FK so the release-gate approval flow can flip `prompts.active_version_id` to the candidate.
+- **Phoenix tags** (`production`, `candidate`, `rejected`, `previous`) are still applied via MCP `add-prompt-version-tag` after diagnosis (`candidate`) and after approval (`production` / `previous` for the outgoing one). They are now decorative — the agent never reads them.
+- **Three ways a `prompt_versions` row gets created:**
+  1. Boot seed (`source = seed`) — v1.0.0 written by `init_db` from `agent/prompts.py` defaults.
+  2. Auto pipeline (`source = diagnosis_proposal`) — `generate_proposal` persists the patched text and stamps the FK back to the trigger.
+  3. Manual edit (`source = manual`) — `POST /api/prompts/{id}/versions` with `prompt_text` + optional `version_tag` + `description`.
+- **Two ways `prompts.active_version_id` is promoted:** automatic experiment + release-gate approval (`release_gate.approve_release` calls `set_active_version`), or — explicitly out of scope per UX — never directly. The "Save and run experiment" path on the Prompts page always routes through evaluation; there is no "promote immediately" affordance in the UI or API.
 
 ### 11.6 Evaluator Hub
 
@@ -596,16 +746,20 @@ The copilot reads Phoenix through MCP to diagnose, and writes back through MCP t
 
 | Data type | Write method | Notes |
 |---|---|---|
-| Traces/spans | OpenTelemetry SDK | Auto-instrumented |
+| Traces/spans | OpenTelemetry SDK | Auto-instrumented; Phoenix-only |
 | Session annotations | Phoenix SDK/API | Conversation-quality evals |
 | Span annotations | Phoenix SDK/API | Per-step evals |
-| Annotation configs | Phoenix SDK/API | Pre-register on first run |
-| Dataset examples | **Phoenix MCP** (`add-dataset-examples`) | Seed data via SDK at init; failure corpus + regression cases via MCP |
-| Prompt versions | **Phoenix MCP** (`upsert-prompt`) | Copilot creates candidate prompts via MCP. Workflow metadata in local DB. |
-| Prompt tags | **Phoenix MCP** (`add-prompt-version-tag`) | Promotion workflow: `candidate` → `production` via MCP |
-| Experiments | Phoenix SDK/API (`run_experiment`) | Full experiment execution. MCP cannot run experiments. |
+| Annotation configs | Phoenix SDK/API | Pre-registered at app startup |
+| Dataset examples | **Phoenix MCP** (`add-dataset-examples`) | Seed via SDK at init; regression cases via MCP |
+| **Prompt versions (canonical)** | **Local DB** (`prompt_versions` insert) | Source of truth; agent reads from here. |
+| Prompt versions (mirror) | Phoenix MCP (`upsert-prompt`) | For experiment runtime + visibility |
+| Prompt active selection | **Local DB** (`prompts.active_version_id`) | Flipped by `release_gate.approve_release` after promotion |
+| Prompt tags | Phoenix MCP (`add-prompt-version-tag`) | `production` / `previous` / `candidate` / `rejected`; informational |
+| Experiments (verdict) | **Local DB** (`experiments` row with FK columns) | Final metrics + baseline/candidate FK |
+| Experiments (runtime) | Phoenix SDK/API (`run_experiment`) | Phoenix runs the comparisons |
+| Release gate decisions | **Local DB** (`release_gate_decisions`, mutated by approve/reject) | Includes audit trail in `human_approvals` + `audit_events` |
 | Evaluator definitions | Phoenix Evaluator Hub | 7 LLM evaluators registered with version history |
-| Improvement records | Local DB | Workflow state, approval status |
+| Improvement records | **Local DB** (`improvement_triggers`, `regression_examples`) | Workflow state |
 
 ---
 
@@ -965,50 +1119,71 @@ CREATE TABLE audit_events (
 
 ## 14. API Contracts
 
-Standard response envelope:
+Standard response envelope (returned by every endpoint, success or error):
 
 ```json
-{ "ok": true, "data": {}, "error": null }
+{ "ok": true, "data": {}, "error": null, "request_id": "uuid" }
 ```
+
+Validation failures return 400 with `ok=false`, `error="<field>: <message>"`. Domain errors map to 400/404/409/500/502/503 per the handler registry in `api/middleware.py`. List endpoints support `?page=1&page_size=20`. All routes are kebab-case; bodies and JSON fields are snake_case (per CLAUDE.md).
 
 ### 14.1 Ticket endpoints
 
-- `POST /api/tickets/run` — Run support agent on a ticket
-- `GET /api/tickets` — List tickets (with filters)
-- `GET /api/tickets/{ticket_id}` — Get single ticket
+- `GET /api/tickets` — list (pagination)
+- `GET /api/tickets/{ticket_id}` — single ticket
+- `POST /api/tickets/{ticket_id}/run` — run support agent on a ticket; returns `{agent_run, eval_results, triggers_created}`
 
 ### 14.2 Conversation endpoints
 
-- `GET /api/conversations/{conversation_session_id}` — Get conversation with runs
+- `GET /api/conversations` — list sessions (pagination)
+- `GET /api/conversations/{conversation_session_id}` — session with all runs and embedded eval results
 
-### 14.3 Eval endpoints
+### 14.3 Eval and failure endpoints
 
-- `POST /api/conversations/{id}/evaluate` — Run evals for latest run
-- `GET /api/evals/{agent_run_id}` — Get eval results for a run
-- `GET /api/failures` — Get active failure aggregates
+- `GET /api/evals/{agent_run_id}` — eval results for a run (returned as `{agent_run, eval_results, triggers_created}`)
+- `GET /api/failures?active_only=true` — failure aggregates
 
 ### 14.4 Improvement endpoints
 
-- `POST /api/improvements/analyze` — Start MCP-backed diagnosis
-- `POST /api/improvements/{id}/generate-regressions` — Generate regression cases
-- `GET /api/improvements/{id}` — Get improvement with diagnosis/patch
-- `GET /api/improvements` — List improvement triggers
+- `GET /api/improvements` — list triggers (pagination)
+- `GET /api/improvements/{id}` — wrapped as `{trigger, regression_examples}`
+- `POST /api/improvements` — manually create a trigger from a `failure_key`
+- `POST /api/improvements/{id}/actions/analyze` — diagnose + generate proposal (also persists candidate as a local `prompt_versions` row)
+- `POST /api/improvements/{id}/actions/generate-regressions` — synthesize regression test cases and upload to Phoenix dataset
 
 ### 14.5 Experiment endpoints
 
-- `POST /api/experiments/run` — Run baseline vs candidate experiment
-- `GET /api/experiments/{experiment_id}` — Get experiment details
-- `GET /api/experiments` — List experiments
+- `GET /api/experiments` — list (pagination)
+- `GET /api/experiments/{experiment_id}` — wrapped as `{experiment, release_gate_decision, baseline_prompt_text, candidate_prompt_text}` (texts resolved via FK)
+- `POST /api/experiments` — create + run for an `improvement_trigger_id` (consumed by the auto-diagnosis path)
 
 ### 14.6 Release gate endpoints
 
-- `GET /api/release-gate/{experiment_id}` — Get release gate decision
-- `POST /api/release-gate/{id}/approve` — Human approval
+- `GET /api/release-gate` — list decisions (pagination)
+- `GET /api/release-gate/{decision_id}` — wrapped as `{decision, experiment, human_approval}`
+- `POST /api/release-gate/{decision_id}/actions/approve` — body `{reviewer_id, comment}`; flips `decision` to `promoted`, calls `set_active_version` so the agent uses the candidate immediately, tags Phoenix mirror as `production`, writes audit event
+- `POST /api/release-gate/{decision_id}/actions/reject` — body `{reviewer_id, comment}`; flips `decision` to `rejected`, tags Phoenix mirror as `rejected`, writes audit event
 
-### 14.7 Utility endpoints
+### 14.7 Prompt endpoints
 
-- `POST /api/demo/seed` — Seed demo data
-- `GET /api/audit` — Query audit events
+- `GET /api/prompts` — list prompts
+- `GET /api/prompts/{identifier}` — single prompt (with `active_version_id`)
+- `GET /api/prompts/{identifier}/versions` — paginated history, newest first
+- `GET /api/prompts/{identifier}/versions/{version_id}` — single version
+- `POST /api/prompts/{identifier}/versions` — body `{prompt_text, version_tag?, description?}` — creates a `manual` version. Does NOT change `active_version_id`.
+- `POST /api/prompts/{identifier}/versions/{version_id}/actions/experiment` — creates a synthetic `improvement_triggers` row (`manual_demo_trigger`) and an `experiments` row in `pending` with both FK columns populated. The standard release-gate flow takes over from there.
+
+### 14.8 Dashboard endpoints
+
+- `GET /api/activity?limit=20` — unified timeline merging runs, failures, triggers, experiments, release decisions (powers Home page Recent Activity)
+- `GET /api/config` — redacted settings dump (`<configured>` / `<missing>` for secrets) for the Settings page configuration table
+- `GET /api/health` — composite probe: SQLite ping, Phoenix client ping, Gemini client ping, all run concurrently; each check returns `{ok, detail, response_ms}`
+
+### 14.9 Utility / demo endpoints
+
+- `POST /api/demo/seed` — idempotent seed (tickets, datasets, base prompt v1.0.0)
+- `POST /api/demo/run-all` — run agent across all seed tickets
+- `GET /api/audit` — query `audit_events` for compliance / debugging
 
 ---
 

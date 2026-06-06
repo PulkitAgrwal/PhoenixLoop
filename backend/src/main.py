@@ -1,18 +1,22 @@
 """PhoenixLoop FastAPI application."""
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api.activity import router as activity_router
+from src.api.config_api import router as config_router
 from src.api.conversations import router as conversations_router
 from src.api.demo import router as demo_router
 from src.api.evals import router as evals_router
 from src.api.experiments import router as experiments_router
 from src.api.improvements import router as improvements_router
 from src.api.middleware import RequestIdMiddleware, register_exception_handlers
+from src.api.prompts import router as prompts_router
 from src.api.release_gate import router as release_gate_router
 from src.api.tickets import router as tickets_router
 from src.config import get_settings
@@ -28,6 +32,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     setup_logging(settings.app_env)
     logger.info("PhoenixLoop starting up...")
+
+    # Google ADK / google-genai read GOOGLE_API_KEY directly from os.environ,
+    # so we forward the value loaded by pydantic-settings here.
+    if settings.google_api_key:
+        os.environ.setdefault("GOOGLE_API_KEY", settings.google_api_key)
+    if settings.google_genai_use_vertexai:
+        os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "true")
 
     db_path = settings.database_url.replace("sqlite:///", "")
     await init_db(db_path)
@@ -76,4 +87,7 @@ app.include_router(evals_router, prefix="/api")
 app.include_router(improvements_router, prefix="/api")
 app.include_router(experiments_router, prefix="/api")
 app.include_router(release_gate_router, prefix="/api")
+app.include_router(prompts_router, prefix="/api")
+app.include_router(activity_router, prefix="/api")
+app.include_router(config_router, prefix="/api")
 app.include_router(demo_router, prefix="/api")

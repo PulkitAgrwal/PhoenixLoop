@@ -11,6 +11,7 @@ from typing import Protocol
 
 import aiosqlite
 
+from src.diagnosis.phoenix_mcp import PromptInfo
 from src.exceptions import ReleaseGateError
 from src.models import (
     AuditEvent,
@@ -30,7 +31,7 @@ logger = logging.getLogger(__name__)
 class PromptMCPClient(Protocol):
     """Minimal interface for the MCP client used by the approval flow."""
 
-    async def read_production_prompt(self) -> dict | None: ...
+    async def read_production_prompt(self) -> PromptInfo | None: ...
     async def tag_prompt_version(self, version_id: str, tag: str) -> None: ...
 
 
@@ -209,6 +210,7 @@ async def approve_release(
         insert_audit_event,
         insert_human_approval,
         update_improvement_trigger,
+        update_release_gate_decision_status,
     )
 
     now = datetime.now(timezone.utc).isoformat()
@@ -222,14 +224,45 @@ async def approve_release(
     if not experiment:
         raise ReleaseGateError(f"Experiment not found: {decision.experiment_id}")
 
+    # Flip the decision to promoted so subsequent reads reflect the action
+    await update_release_gate_decision_status(
+        db, decision_id, ReleaseDecision.PROMOTED
+    )
+
+    # Promote the candidate to be the active prompt in the local DB. The
+    # agent reads from the local DB (post-spec-0) — so this is the bit that
+    # actually changes what the agent uses. If the FK is missing (older
+    # experiments predating this wiring), the Phoenix tag still happens
+    # below but the local prompt remains unchanged.
+    if experiment.candidate_prompt_version_id:
+        from src.db import set_active_version as db_set_active_version
+
+        await db_set_active_version(
+            db, "support-agent", experiment.candidate_prompt_version_id
+        )
+        logger.info(
+            "Promoted candidate prompt %s to active for experiment %s",
+            experiment.candidate_prompt_version_id,
+            experiment.experiment_id,
+        )
+    else:
+        logger.warning(
+            "Experiment %s promoted but has no candidate_prompt_version_id — "
+            "local active prompt unchanged. (Likely an older experiment "
+            "predating spec 0b wiring.)",
+            experiment.experiment_id,
+        )
+
     # Tag prompts via MCP
     if mcp_client:
-        # Read current production to tag as 'previous'
+        # Read current production to tag as 'previous'.
+        # ``read_production_prompt`` returns a ``PromptInfo`` Pydantic model;
+        # access fields as attributes, not dict keys.
         current_prod = await mcp_client.read_production_prompt()
-        if current_prod:
-            prod_version_id = current_prod.get("version_id")
-            if prod_version_id:
-                await mcp_client.tag_prompt_version(prod_version_id, "previous")
+        if current_prod and current_prod.version_id:
+            await mcp_client.tag_prompt_version(
+                current_prod.version_id, "previous"
+            )
 
         # Tag candidate as 'production'
         candidate_version = experiment.candidate_prompt_version
@@ -297,9 +330,15 @@ async def reject_release(
         get_release_gate_decision,
         insert_audit_event,
         insert_human_approval,
+        update_release_gate_decision_status,
     )
 
     now = datetime.now(timezone.utc).isoformat()
+
+    # Flip the decision to rejected so subsequent reads reflect the action
+    await update_release_gate_decision_status(
+        db, decision_id, ReleaseDecision.REJECTED
+    )
 
     # Tag candidate as 'rejected' via MCP
     if mcp_client:

@@ -20,7 +20,11 @@ from src.models import (
     FailureAggregate,
     HumanApproval,
     ImprovementTrigger,
+    Prompt,
+    PromptSource,
+    PromptVersion,
     RegressionExample,
+    ReleaseDecision,
     ReleaseGateDecision,
     SupportTicket,
     ToolCallRecord,
@@ -74,6 +78,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     latency_ms              INTEGER,
     token_count_input       INTEGER,
     token_count_output      INTEGER,
+    prompt_version_id       TEXT,
     created_at              TEXT NOT NULL
 );
 
@@ -152,6 +157,8 @@ CREATE TABLE IF NOT EXISTS experiments (
     eval_summary_json                TEXT,
     started_at                       TEXT,
     completed_at                     TEXT,
+    baseline_prompt_version_id       TEXT,
+    candidate_prompt_version_id      TEXT,
     created_at                       TEXT NOT NULL
 );
 
@@ -185,6 +192,29 @@ CREATE TABLE IF NOT EXISTS audit_events (
     detail_json    TEXT DEFAULT '{}',
     created_at     TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS prompts (
+    prompt_identifier   TEXT PRIMARY KEY,
+    description         TEXT,
+    active_version_id   TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS prompt_versions (
+    prompt_version_id       TEXT PRIMARY KEY,
+    prompt_identifier       TEXT NOT NULL REFERENCES prompts(prompt_identifier),
+    version_tag             TEXT NOT NULL,
+    prompt_text             TEXT NOT NULL,
+    parent_version_id       TEXT REFERENCES prompt_versions(prompt_version_id),
+    source                  TEXT NOT NULL,
+    improvement_trigger_id  TEXT REFERENCES improvement_triggers(improvement_trigger_id),
+    created_at              TEXT NOT NULL,
+    metadata_json           TEXT DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_prompt_versions_identifier ON prompt_versions(prompt_identifier);
+CREATE INDEX IF NOT EXISTS idx_prompt_versions_parent ON prompt_versions(parent_version_id);
 """
 
 
@@ -193,11 +223,13 @@ CREATE TABLE IF NOT EXISTS audit_events (
 # ---------------------------------------------------------------------------
 
 async def init_db(db_path: str) -> None:
-    """Create all tables, enable WAL mode and foreign keys."""
+    """Create all tables, enable WAL mode and foreign keys, seed defaults."""
     logger.info("Initializing database at %s", db_path)
     async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
         await db.executescript(_CREATE_TABLES_SQL)
         await db.commit()
+        await _seed_default_prompt(db)
     logger.info("Database initialized successfully")
 
 
@@ -415,6 +447,7 @@ def _agent_run_from_row(row: aiosqlite.Row) -> AgentRun:
         latency_ms=row["latency_ms"],
         token_count_input=row["token_count_input"],
         token_count_output=row["token_count_output"],
+        prompt_version_id=row["prompt_version_id"],
         created_at=row["created_at"],
     )
 
@@ -430,8 +463,8 @@ async def insert_agent_run(db: aiosqlite.Connection, run: AgentRun) -> None:
             agent_version, prompt_version, trace_id, root_span_id,
             phoenix_session_id, input_hash, response_json, tool_calls_json,
             status, latency_ms, token_count_input, token_count_output,
-            created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            prompt_version_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             run.agent_run_id,
             run.conversation_session_id,
@@ -449,6 +482,7 @@ async def insert_agent_run(db: aiosqlite.Connection, run: AgentRun) -> None:
             run.latency_ms,
             run.token_count_input,
             run.token_count_output,
+            run.prompt_version_id,
             run.created_at,
         ),
     )
@@ -808,6 +842,8 @@ def _experiment_from_row(row: aiosqlite.Row) -> ExperimentRecord:
         eval_summary_json=_json_loads(row["eval_summary_json"]),  # type: ignore[arg-type]
         started_at=row["started_at"],
         completed_at=row["completed_at"],
+        baseline_prompt_version_id=row["baseline_prompt_version_id"],
+        candidate_prompt_version_id=row["candidate_prompt_version_id"],
         created_at=row["created_at"],
     )
 
@@ -826,8 +862,10 @@ async def insert_experiment(
             baseline_latency_p50_ms, candidate_latency_p50_ms,
             baseline_hallucination_rate, candidate_hallucination_rate,
             regression_cases_pass_rate, safety_canary_pass_rate,
-            eval_summary_json, started_at, completed_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            eval_summary_json, started_at, completed_at,
+            baseline_prompt_version_id, candidate_prompt_version_id,
+            created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             exp.experiment_id,
             exp.improvement_trigger_id,
@@ -850,6 +888,8 @@ async def insert_experiment(
             _json_dumps(exp.eval_summary_json) if exp.eval_summary_json is not None else None,
             exp.started_at,
             exp.completed_at,
+            exp.baseline_prompt_version_id,
+            exp.candidate_prompt_version_id,
             exp.created_at,
         ),
     )
@@ -874,7 +914,8 @@ async def update_experiment(
            baseline_hallucination_rate = ?,
            candidate_hallucination_rate = ?,
            regression_cases_pass_rate = ?, safety_canary_pass_rate = ?,
-           eval_summary_json = ?, started_at = ?, completed_at = ?
+           eval_summary_json = ?, started_at = ?, completed_at = ?,
+           baseline_prompt_version_id = ?, candidate_prompt_version_id = ?
            WHERE experiment_id = ?""",
         (
             exp.improvement_trigger_id,
@@ -897,6 +938,8 @@ async def update_experiment(
             _json_dumps(exp.eval_summary_json) if exp.eval_summary_json is not None else None,
             exp.started_at,
             exp.completed_at,
+            exp.baseline_prompt_version_id,
+            exp.candidate_prompt_version_id,
             exp.experiment_id,
         ),
     )
@@ -987,6 +1030,26 @@ async def get_release_gate_decision(
     if row is None:
         return None
     return _release_gate_from_row(row)
+
+
+async def update_release_gate_decision_status(
+    db: aiosqlite.Connection,
+    decision_id: str,
+    new_decision: ReleaseDecision,
+) -> None:
+    """Update the ``decision`` column on a release gate row.
+
+    Used by the approval/rejection flows to transition a row from
+    ``pending_human_review`` to ``promoted`` or ``rejected`` once a human
+    acts. The row's other audit data lives on ``human_approvals``.
+    """
+    await db.execute(
+        """UPDATE release_gate_decisions
+              SET decision = ?
+            WHERE release_gate_decision_id = ?""",
+        (new_decision.value, decision_id),
+    )
+    await db.commit()
 
 
 async def get_release_gate_for_experiment(
@@ -1180,3 +1243,195 @@ async def list_audit_events(
         for r in rows
     ]
     return items, total_count
+
+
+# ---------------------------------------------------------------------------
+# CRUD — Prompts and Prompt Versions
+# ---------------------------------------------------------------------------
+
+def _prompt_from_row(row: aiosqlite.Row) -> Prompt:
+    """Deserialize a prompts row into a Prompt model."""
+    return Prompt(
+        prompt_identifier=row["prompt_identifier"],
+        description=row["description"],
+        active_version_id=row["active_version_id"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _prompt_version_from_row(row: aiosqlite.Row) -> PromptVersion:
+    """Deserialize a prompt_versions row into a PromptVersion model."""
+    return PromptVersion(
+        prompt_version_id=row["prompt_version_id"],
+        prompt_identifier=row["prompt_identifier"],
+        version_tag=row["version_tag"],
+        prompt_text=row["prompt_text"],
+        parent_version_id=row["parent_version_id"],
+        source=PromptSource(row["source"]),
+        improvement_trigger_id=row["improvement_trigger_id"],
+        created_at=row["created_at"],
+        metadata_json=_json_loads(row["metadata_json"], default={}),  # type: ignore[arg-type]
+    )
+
+
+async def insert_prompt(db: aiosqlite.Connection, prompt: Prompt) -> None:
+    """Insert or replace a prompt row (idempotent on prompt_identifier)."""
+    await db.execute(
+        """INSERT OR REPLACE INTO prompts
+           (prompt_identifier, description, active_version_id,
+            created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        (
+            prompt.prompt_identifier,
+            prompt.description,
+            prompt.active_version_id,
+            prompt.created_at,
+            prompt.updated_at,
+        ),
+    )
+    await db.commit()
+
+
+async def get_prompt(
+    db: aiosqlite.Connection, identifier: str
+) -> Prompt | None:
+    """Fetch a single prompt by identifier."""
+    cursor = await db.execute(
+        "SELECT * FROM prompts WHERE prompt_identifier = ?", (identifier,)
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    return _prompt_from_row(row)
+
+
+async def list_prompts(db: aiosqlite.Connection) -> list[Prompt]:
+    """List all prompts ordered by identifier."""
+    cursor = await db.execute(
+        "SELECT * FROM prompts ORDER BY prompt_identifier"
+    )
+    rows = await cursor.fetchall()
+    return [_prompt_from_row(r) for r in rows]
+
+
+async def insert_prompt_version(
+    db: aiosqlite.Connection, pv: PromptVersion
+) -> None:
+    """Insert an immutable prompt version row."""
+    await db.execute(
+        """INSERT INTO prompt_versions
+           (prompt_version_id, prompt_identifier, version_tag, prompt_text,
+            parent_version_id, source, improvement_trigger_id, created_at,
+            metadata_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            pv.prompt_version_id,
+            pv.prompt_identifier,
+            pv.version_tag,
+            pv.prompt_text,
+            pv.parent_version_id,
+            pv.source.value,
+            pv.improvement_trigger_id,
+            pv.created_at,
+            _json_dumps(pv.metadata_json),
+        ),
+    )
+    await db.commit()
+
+
+async def get_prompt_version(
+    db: aiosqlite.Connection, version_id: str
+) -> PromptVersion | None:
+    """Fetch a single prompt version by id."""
+    cursor = await db.execute(
+        "SELECT * FROM prompt_versions WHERE prompt_version_id = ?",
+        (version_id,),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    return _prompt_version_from_row(row)
+
+
+async def list_prompt_versions(
+    db: aiosqlite.Connection,
+    identifier: str,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[PromptVersion]:
+    """List versions for a prompt identifier, newest first."""
+    cursor = await db.execute(
+        """SELECT * FROM prompt_versions
+           WHERE prompt_identifier = ?
+           ORDER BY created_at DESC LIMIT ? OFFSET ?""",
+        (identifier, limit, offset),
+    )
+    rows = await cursor.fetchall()
+    return [_prompt_version_from_row(r) for r in rows]
+
+
+async def set_active_version(
+    db: aiosqlite.Connection, identifier: str, version_id: str
+) -> None:
+    """Point a prompt at a specific version as the active production version."""
+    from datetime import datetime, timezone
+
+    await db.execute(
+        """UPDATE prompts
+           SET active_version_id = ?, updated_at = ?
+           WHERE prompt_identifier = ?""",
+        (
+            version_id,
+            datetime.now(timezone.utc).isoformat(),
+            identifier,
+        ),
+    )
+    await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Seed
+# ---------------------------------------------------------------------------
+
+async def _seed_default_prompt(db: aiosqlite.Connection) -> None:
+    """Seed the support-agent prompt and v1.0.0 version if not present.
+
+    Idempotent: a second call observes the existing prompt and is a no-op.
+    """
+    import uuid
+    from datetime import datetime, timezone
+
+    from src.agent.prompts import DEFAULT_SYSTEM_PROMPT
+
+    existing = await get_prompt(db, "support-agent")
+    if existing is not None:
+        logger.debug("Default prompt already seeded; skipping")
+        return
+
+    now = datetime.now(timezone.utc).isoformat()
+    version_id = str(uuid.uuid4())
+
+    await insert_prompt(
+        db,
+        Prompt(
+            prompt_identifier="support-agent",
+            description="AcmeFlow customer support agent",
+            active_version_id=None,
+            created_at=now,
+            updated_at=now,
+        ),
+    )
+    await insert_prompt_version(
+        db,
+        PromptVersion(
+            prompt_version_id=version_id,
+            prompt_identifier="support-agent",
+            version_tag="v1.0.0",
+            prompt_text=DEFAULT_SYSTEM_PROMPT,
+            source=PromptSource.SEED,
+            created_at=now,
+        ),
+    )
+    await set_active_version(db, "support-agent", version_id)
+    logger.info("Seeded default prompt v1.0.0 (id=%s)", version_id)

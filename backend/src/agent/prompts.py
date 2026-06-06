@@ -1,7 +1,18 @@
-"""Prompt management for the support agent via Phoenix."""
+"""Prompt management for the support agent.
+
+Runtime resolution reads from the local ``prompts`` / ``prompt_versions``
+tables. Phoenix is no longer the source of truth for prompt text — it remains
+available as a publication target (``create_initial_prompt``) and an
+observability surface, but is not on the request path.
+"""
 
 import logging
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+from src.config import get_settings
+
+if TYPE_CHECKING:
+    import aiosqlite
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +35,7 @@ You have access to these tools:
 - ALWAYS check refund eligibility before approving or discussing any refund
 - NEVER approve a refund without calling check_refund_eligibility first
 - NEVER skip tool calls — use them to ground your answers in real data
+- When `check_refund_eligibility` returns `eligible: false`, NEVER simply deny and end the conversation. You MUST either (a) cite the specific Policy ID, clearly explain why eligibility was denied (e.g. days since charge vs. the 30-day window), AND offer the customer the option to have Billing review the case; or (b) call `create_escalation` to the Billing team yourself when the customer has expressed urgency, frustration, or a specific dispute about the timing/amount.
 
 ### Privacy and Security Rules
 - NEVER disclose one customer's data to another customer
@@ -35,11 +47,12 @@ You have access to these tools:
 - If the customer mentions legal action, lawsuits, or attorneys → IMMEDIATELY escalate to the legal team using create_escalation
 - If there's a security concern (unauthorized access, data breach) → IMMEDIATELY escalate to the security team
 - If the customer requests something you cannot handle → escalate to the appropriate team
+- If a policy decision (refund, plan change, access) goes AGAINST the customer AND they have raised any dispute, urgency, or specific factual claim about timing/amount → escalate to the team that owns that policy (Billing for refunds, Account Management for plan/access) so a human can review. A clear-cut policy explanation alone is not enough when the customer is contesting the facts.
 - Always acknowledge the escalation and provide a reference number to the customer
 
 ### Response Quality Rules
-- Cite specific policy documents when referencing policies
-- Be specific about amounts, dates, and timelines
+- Whenever you reference a policy, cite it by its Policy ID (format: `POL-XXX-NNN`, e.g. `POL-REFUND-001`). A general phrase like "our refund policy" is NOT a citation. The customer must be able to look the policy up.
+- Be specific about amounts, dates, and timelines — quote the actual values you saw in the tool outputs (e.g. "charged on 2026-05-01, which is 36 days ago"), not vague phrases.
 - If unsure, say so — do not make up information
 - Match the customer's tone — be empathetic for complaints, professional for inquiries
 - Keep responses concise but complete
@@ -104,33 +117,43 @@ class PhoenixClientProtocol(Protocol):
     prompts: _PromptsWithTags
 
 
-def get_production_prompt(phoenix_client: PhoenixClientProtocol | None = None) -> str:
-    """Load the production prompt from Phoenix, falling back to default.
+async def get_production_prompt(
+    db: "aiosqlite.Connection",
+) -> tuple[str, str | None]:
+    """Return ``(prompt_text, prompt_version_id)`` for the active support-agent prompt.
+
+    Reads from the local ``prompts`` table. If the active version is missing
+    (e.g. seed hasn't run yet for some reason), falls back to
+    :data:`DEFAULT_SYSTEM_PROMPT` and logs a WARNING so the silent fallback
+    is visible in operations.
 
     Args:
-        phoenix_client: Phoenix client instance. If None or if Phoenix
-            is unavailable, returns the hardcoded default prompt.
+        db: An aiosqlite connection. Required — Phoenix is no longer consulted.
 
     Returns:
-        The system prompt string.
+        Tuple of (prompt text, version id). The version id is ``None`` when
+        the fallback path is taken.
     """
-    if phoenix_client is None:
-        logger.info("No Phoenix client provided, using default system prompt")
-        return DEFAULT_SYSTEM_PROMPT
+    from src.db import get_prompt, get_prompt_version
 
-    try:
-        prompt = phoenix_client.prompts.get(
-            prompt_identifier="support-agent",
-            tag="production",
+    prompt = await get_prompt(db, "support-agent")
+    if prompt is None or prompt.active_version_id is None:
+        logger.warning(
+            "No active prompt version in DB for 'support-agent'; "
+            "falling back to DEFAULT_SYSTEM_PROMPT"
         )
-        if prompt and hasattr(prompt, "template"):
-            logger.info("Loaded production prompt from Phoenix")
-            return prompt.template
-        logger.warning("Phoenix prompt found but no template, using default")
-        return DEFAULT_SYSTEM_PROMPT
-    except Exception as exc:
-        logger.warning("Failed to load prompt from Phoenix: %s, using default", exc)
-        return DEFAULT_SYSTEM_PROMPT
+        return DEFAULT_SYSTEM_PROMPT, None
+
+    version = await get_prompt_version(db, prompt.active_version_id)
+    if version is None:
+        logger.warning(
+            "Active version id %s missing from prompt_versions; "
+            "using DEFAULT_SYSTEM_PROMPT",
+            prompt.active_version_id,
+        )
+        return DEFAULT_SYSTEM_PROMPT, None
+
+    return version.prompt_text, version.prompt_version_id
 
 
 def create_initial_prompt(phoenix_client: PhoenixClientProtocol) -> str | None:
@@ -146,7 +169,7 @@ def create_initial_prompt(phoenix_client: PhoenixClientProtocol) -> str | None:
         prompt_version = phoenix_client.prompts.create(
             name="support-agent",
             template=DEFAULT_SYSTEM_PROMPT,
-            model_name="gemini-2.0-flash",
+            model_name=get_settings().gemini_model,
         )
         version_id = getattr(prompt_version, "id", None)
         if version_id:

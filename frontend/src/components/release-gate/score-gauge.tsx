@@ -29,44 +29,37 @@ export function ScoreGauge({ score, label = "Release Score" }: ScoreGaugeProps) 
     setDisplayScore(score);
   }, [score]);
 
-  // SVG arc geometry for a semicircle
+  // Top-semicircle gauge geometry. The arc goes from the left point
+  // (cx - r, cy) clockwise through the top apex (cx, cy - r) to the right
+  // point (cx + r, cy). With cy = radius + strokeWidth/2 the arc just fits
+  // inside the SVG box, so the previous overflow into sibling cards is gone.
   const radius = 80;
   const strokeWidth = 14;
   const cx = 110;
-  const cy = 110;
-  // Full arc circumference for the semicircle
-  const circumference = Math.PI * radius; // half circle
+  const cy = radius + strokeWidth / 2; // = 87 — arc bottom edge at y=cy
+  const svgWidth = 220;
+  const svgHeight = cy + strokeWidth / 2 + 8; // = 102, plus tiny visual pad
 
-  // Convert score (0-1) to stroke-dashoffset
+  const circumference = Math.PI * radius; // half-circle arc length
   const fillLength = displayScore * circumference;
   const dashOffset = circumference - fillLength;
 
   const trackColor = "#e5e7eb"; // gray-200
   const fillColor = getScoreColor(displayScore);
 
-  // Semicircle going from 180° to 360° (i.e., 180°→0° the long way clockwise through top)
-  // Let's define the arc from 180 to 0 (clockwise through top = 180 degree sweep)
-  const sStart = 180; // degrees from top = left point
-  const sEnd = 360;   // = 0, right point
-
-  function arcPoint(deg: number, r: number) {
-    const rad = ((deg - 90) * Math.PI) / 180;
-    return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
-  }
-
-  const pStart = arcPoint(sStart, radius);
-  const pEnd = arcPoint(sEnd, radius);
-
-  const semicirclePath = `M ${pStart.x} ${pStart.y} A ${radius} ${radius} 0 1 1 ${pEnd.x} ${pEnd.y}`;
+  // SVG sweep-flag=1 with y-down means visual clockwise → goes through TOP
+  const semicirclePath = `M ${cx - radius} ${cy} A ${radius} ${radius} 0 0 1 ${cx + radius} ${cy}`;
 
   return (
     <div className="flex flex-col items-center gap-2">
-      <div className="relative" style={{ width: 220, height: 130 }}>
+      <div
+        className="relative"
+        style={{ width: svgWidth, height: svgHeight }}
+      >
         <svg
-          width={220}
-          height={130}
-          viewBox="0 0 220 130"
-          style={{ overflow: "visible" }}
+          width={svgWidth}
+          height={svgHeight}
+          viewBox={`0 0 ${svgWidth} ${svgHeight}`}
         >
           {/* Track (gray background arc) */}
           <path
@@ -90,19 +83,19 @@ export function ScoreGauge({ score, label = "Release Score" }: ScoreGaugeProps) 
           />
         </svg>
 
-        {/* Score number centered in the semicircle */}
-        <div
-          className="absolute inset-0 flex flex-col items-center justify-end pb-1"
-        >
+        {/* Score number tucked under the arc apex */}
+        <div className="absolute inset-x-0 bottom-0 flex flex-col items-center pb-1">
           <motion.span
-            className={`text-3xl font-bold bg-gradient-to-br ${getScoreGradient(displayScore)} bg-clip-text text-transparent`}
+            className={`text-3xl font-bold bg-gradient-to-br ${getScoreGradient(displayScore)} bg-clip-text text-transparent leading-none`}
             initial={{ opacity: 0, scale: 0.6 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ duration: 0.5, delay: 0.4, ease: "backOut" }}
           >
             {(displayScore * 100).toFixed(0)}
           </motion.span>
-          <span className="text-xs text-muted-foreground font-medium">/ 100</span>
+          <span className="text-[10px] text-muted-foreground font-medium mt-0.5">
+            / 100
+          </span>
         </div>
       </div>
 

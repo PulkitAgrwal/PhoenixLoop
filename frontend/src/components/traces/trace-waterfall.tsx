@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState } from "react";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
+import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ToolCallRecord } from "@/lib/types";
 import {
@@ -14,8 +15,12 @@ import {
 interface TraceWaterfallProps {
   toolCalls: ToolCallRecord[];
   totalLatencyMs: number;
-  onSelectSpan?: (toolCall: ToolCallRecord | null) => void;
+  onSelectSpan?: (
+    toolCall: ToolCallRecord | null,
+    syntheticId: string | null,
+  ) => void;
   selectedSpanId?: string | null;
+  renderSelectedDetail?: (toolCall: ToolCallRecord) => React.ReactNode;
 }
 
 // Color coding by tool type keyword
@@ -93,6 +98,7 @@ export function TraceWaterfall({
   totalLatencyMs,
   onSelectSpan,
   selectedSpanId,
+  renderSelectedDetail,
 }: TraceWaterfallProps) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
 
@@ -112,25 +118,30 @@ export function TraceWaterfall({
   return (
     <TooltipProvider delayDuration={150}>
       <div className="space-y-1.5">
-        {/* Time axis header */}
+        {/* Time axis header — units match the right-hand label */}
         <div className="flex justify-between px-1 text-[10px] text-muted-foreground font-mono">
-          <span>0ms</span>
+          <span>{effectiveTotal >= 1000 ? "0s" : "0ms"}</span>
           <span>{formatLatency(effectiveTotal)}</span>
         </div>
 
         {toolCalls.map((tc, index) => {
           const colors = getToolColors(tc.tool_name);
           const widthPct = getBarWidthPercent(tc.latency_ms, effectiveTotal);
+          // span_id is null for in-memory tool call records; match by index
+          // (each tc is unique within the waterfall) by encoding the index as
+          // the synthetic selectedSpanId at the parent. Falls back to a
+          // span_id match for tool calls that DO have real span ids.
+          const syntheticId = `tc-${index}`;
           const isSelected =
-            selectedSpanId !== undefined &&
-            selectedSpanId !== null &&
-            tc.span_id === selectedSpanId;
+            selectedSpanId === syntheticId ||
+            (tc.span_id != null && tc.span_id === selectedSpanId);
           const isHovered = hoveredIndex === index;
           const isSuccess =
             tc.status === "success" || tc.status === "ok";
 
           return (
-            <Tooltip key={`${tc.tool_name}-${index}`}>
+            <React.Fragment key={`${tc.tool_name}-${index}`}>
+            <Tooltip>
               <TooltipTrigger asChild>
                 <motion.div
                   initial={{ opacity: 0, x: -20 }}
@@ -148,11 +159,24 @@ export function TraceWaterfall({
                       ? "bg-muted/60"
                       : "hover:bg-muted/40"
                   )}
-                  style={{ paddingLeft: `${8 + index * 12}px` }}
-                  onClick={() => onSelectSpan?.(isSelected ? null : tc)}
+                  onClick={() =>
+                    onSelectSpan?.(
+                      isSelected ? null : tc,
+                      isSelected ? null : syntheticId,
+                    )
+                  }
                   onMouseEnter={() => setHoveredIndex(index)}
                   onMouseLeave={() => setHoveredIndex(null)}
                 >
+                  {/* Expand chevron — clear click affordance */}
+                  <motion.span
+                    animate={{ rotate: isSelected ? 90 : 0 }}
+                    transition={{ duration: 0.15 }}
+                    className="shrink-0 text-muted-foreground/60 motion-reduce:transition-none"
+                  >
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </motion.span>
+
                   {/* Tool name label */}
                   <span
                     className={cn(
@@ -224,12 +248,27 @@ export function TraceWaterfall({
                       {tc.span_id}
                     </p>
                   )}
-                  <p className="text-[10px] text-muted-foreground">
-                    Click to inspect
-                  </p>
                 </div>
               </TooltipContent>
             </Tooltip>
+            {/* Inline span detail — opens directly under the clicked row */}
+            <AnimatePresence initial={false}>
+              {isSelected && renderSelectedDetail && (
+                <motion.div
+                  key={`detail-${index}`}
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.18, ease: "easeOut" }}
+                  className="overflow-hidden"
+                >
+                  <div className="pl-7 pr-1 pt-2 pb-1">
+                    {renderSelectedDetail(tc)}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+            </React.Fragment>
           );
         })}
       </div>

@@ -61,11 +61,12 @@ async def get_experiment(
     request_id: str = Depends(get_request_id),
     db: aiosqlite.Connection = Depends(get_db_session),
 ) -> ApiResponse:
-    """Get an experiment with its release gate decision."""
+    """Get an experiment with its release gate decision and prompt texts."""
     from src.db import (
         get_experiment as db_get_experiment,
     )
     from src.db import (
+        get_prompt_version,
         get_release_gate_for_experiment,
     )
 
@@ -77,6 +78,17 @@ async def get_experiment(
 
     gate_decision = await get_release_gate_for_experiment(db, experiment_id)
 
+    # Resolve the prompt texts via the FK columns. Falls back to None when
+    # the experiment predates prompt versioning (FK columns not populated).
+    baseline_text: str | None = None
+    candidate_text: str | None = None
+    if experiment.baseline_prompt_version_id:
+        v = await get_prompt_version(db, experiment.baseline_prompt_version_id)
+        baseline_text = v.prompt_text if v else None
+    if experiment.candidate_prompt_version_id:
+        v = await get_prompt_version(db, experiment.candidate_prompt_version_id)
+        candidate_text = v.prompt_text if v else None
+
     return ApiResponse(
         ok=True,
         data={
@@ -84,6 +96,8 @@ async def get_experiment(
             "release_gate_decision": (
                 gate_decision.model_dump() if gate_decision else None
             ),
+            "baseline_prompt_text": baseline_text,
+            "candidate_prompt_text": candidate_text,
         },
         request_id=request_id,
     )
@@ -120,8 +134,10 @@ async def create_experiment(
     phoenix = get_phoenix_client()
     mcp_client = PhoenixMCPClient()
 
-    # Run the experiment
-    experiment = await run_experiment(trigger, phoenix, mcp_client)
+    # Run the experiment. Pass ``db`` so the orchestrator can stamp the FK
+    # to the locally-persisted candidate prompt_version (used by the
+    # release-gate approval to flip the active prompt).
+    experiment = await run_experiment(trigger, phoenix, mcp_client, db=db)
     await insert_experiment(db, experiment)
 
     # Evaluate release gate

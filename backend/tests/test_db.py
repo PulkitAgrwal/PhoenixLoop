@@ -160,7 +160,7 @@ async def _seed_improvement_trigger(db: aiosqlite.Connection) -> None:
 
 class TestInitDb:
     @pytest.mark.asyncio
-    async def test_creates_all_11_tables(self, db):
+    async def test_creates_all_tables(self, db):
         cursor = await db.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
         )
@@ -175,6 +175,8 @@ class TestInitDb:
             "failure_aggregates",
             "human_approvals",
             "improvement_triggers",
+            "prompts",
+            "prompt_versions",
             "regression_examples",
             "release_gate_decisions",
             "support_tickets",

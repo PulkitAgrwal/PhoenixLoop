@@ -1,9 +1,9 @@
 """Pydantic models and enums for PhoenixLoop domain entities."""
 
 from enum import Enum
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -79,6 +79,48 @@ class AnnotationLevel(str, Enum):
     SPAN = "span"
 
 
+class PromptSource(str, Enum):
+    SEED = "seed"
+    DIAGNOSIS_PROPOSAL = "diagnosis_proposal"
+    MANUAL = "manual"
+
+
+class ActivityEventKind(str, Enum):
+    AGENT_RUN = "agent_run"
+    FAILURE = "failure"
+    IMPROVEMENT_TRIGGER = "improvement_trigger"
+    EXPERIMENT = "experiment"
+    RELEASE_DECISION = "release_decision"
+
+
+# ---------------------------------------------------------------------------
+# Pydantic Models — Prompts
+# ---------------------------------------------------------------------------
+
+class Prompt(BaseModel):
+    """A logical prompt identity (one row per named prompt)."""
+
+    prompt_identifier: str = Field(min_length=1, max_length=128)
+    description: str | None = None
+    active_version_id: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class PromptVersion(BaseModel):
+    """An immutable snapshot of a prompt's text at a point in time."""
+
+    prompt_version_id: str
+    prompt_identifier: str = Field(min_length=1, max_length=128)
+    version_tag: str = Field(min_length=1, max_length=200)
+    prompt_text: str = Field(min_length=1, max_length=200_000)
+    parent_version_id: str | None = None
+    source: PromptSource
+    improvement_trigger_id: str | None = None
+    created_at: str
+    metadata_json: dict[str, Any] = Field(default_factory=dict)
+
+
 # ---------------------------------------------------------------------------
 # Pydantic Models — Ticket
 # ---------------------------------------------------------------------------
@@ -134,6 +176,7 @@ class AgentRun(BaseModel):
     latency_ms: int | None = None
     token_count_input: int | None = None
     token_count_output: int | None = None
+    prompt_version_id: str | None = None
     created_at: str
 
 
@@ -224,7 +267,17 @@ class ExperimentRecord(BaseModel):
     eval_summary_json: dict | None = None
     started_at: str | None = None
     completed_at: str | None = None
+    baseline_prompt_version_id: str | None = None
+    candidate_prompt_version_id: str | None = None
     created_at: str
+
+
+class CreatePromptVersionRequest(BaseModel):
+    """Body for ``POST /api/prompts/{identifier}/versions``."""
+
+    prompt_text: str = Field(min_length=1, max_length=200_000)
+    version_tag: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
 
 
 class ReleaseGateDecision(BaseModel):
@@ -282,3 +335,49 @@ class PaginatedData(BaseModel, Generic[T]):
     page: int
     page_size: int
     has_next: bool
+
+
+# ---------------------------------------------------------------------------
+# Pydantic Models — Activity / Health / Config
+# ---------------------------------------------------------------------------
+
+
+class ActivityEvent(BaseModel):
+    event_id: str
+    kind: ActivityEventKind
+    title: str
+    subtitle: str | None = None
+    timestamp: str
+    target_route: str | None = None
+
+
+class HealthCheck(BaseModel):
+    ok: bool
+    detail: str
+    response_ms: int | None = None
+
+
+class HealthResponse(BaseModel):
+    status: str
+    service: str
+    version: str
+    checks: dict[str, HealthCheck]
+
+
+class ConfigResponse(BaseModel):
+    app_env: str
+    database_url: str
+    gemini_model: str
+    google_api_key: str
+    phoenix_base_url: str
+    phoenix_api_key: str
+    phoenix_project_name: str
+    repeated_failure_count: int
+    repeated_failure_rate: float
+    critical_failure_immediate: bool
+    cooldown_minutes: int
+    release_score_threshold: float
+    latency_budget_ms: int
+    agent_name: str
+    agent_version: str
+    active_prompt_version: str | None

@@ -149,22 +149,16 @@ export function ChatInterface({ ticket }: ChatInterfaceProps) {
         return;
       }
 
-      const run = res.data as AgentRun;
+      // POST /tickets/{id}/run wraps the result as
+      // { agent_run, eval_results, triggers_created } — unwrap it.
+      const payload = res.data as {
+        agent_run: AgentRun;
+        eval_results: EvalResult[];
+        triggers_created: number;
+      };
+      const run = payload.agent_run;
+      const evals = payload.eval_results ?? [];
       setLastRun(run);
-
-      // Fetch evals for this run
-      let evals: EvalResult[] = [];
-      try {
-        const evalRes = await api.evals.getForRun(run.agent_run_id);
-        if (evalRes.ok && evalRes.data) {
-          const evalData = evalRes.data as EvalResult[] | { items: EvalResult[] };
-          evals = Array.isArray(evalData)
-            ? evalData
-            : (evalData as { items: EvalResult[] }).items ?? [];
-        }
-      } catch {
-        // Evals are best-effort
-      }
 
       const agentText = extractAgentText(run);
 

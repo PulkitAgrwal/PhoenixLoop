@@ -11,7 +11,6 @@ import {
   RefreshCw,
   ShieldCheck,
 } from "lucide-react";
-import { PageHeader } from "@/components/layout/page-header";
 import { StatCard } from "@/components/shared/stat-card";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { StatusBadge } from "@/components/shared/status-badge";
@@ -64,18 +63,6 @@ function decisionLabel(decision: ReleaseDecision): string {
   }
 }
 
-function formatDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  } catch {
-    return iso;
-  }
-}
-
 function formatDateTime(iso: string): string {
   try {
     return new Date(iso).toLocaleString("en-US", {
@@ -89,7 +76,8 @@ function formatDateTime(iso: string): string {
   }
 }
 
-function shortId(id: string): string {
+function shortId(id: string | null | undefined): string {
+  if (!id) return "—";
   return id.slice(0, 8) + "…";
 }
 
@@ -231,7 +219,18 @@ export default function ReleaseGatePage() {
       try {
         const res = await api.releaseGate.get(id);
         if (res.ok && res.data) {
-          setSelectedDecision(res.data as ReleaseGateDecision);
+          // GET /api/release-gate/{id} wraps the decision as
+          // { decision, experiment, human_approval } — unwrap before storing.
+          const raw = res.data as
+            | ReleaseGateDecision
+            | { decision: ReleaseGateDecision };
+          const decision =
+            "decision" in raw &&
+            raw.decision &&
+            typeof raw.decision === "object"
+              ? (raw.decision as ReleaseGateDecision)
+              : (raw as ReleaseGateDecision);
+          setSelectedDecision(decision);
         }
       } catch {
         // Fall back to list item
@@ -263,22 +262,17 @@ export default function ReleaseGatePage() {
 
   return (
     <div className="space-y-6">
-      {/* Page Header */}
-      <PageHeader
-        title="Release Gate"
-        description="Review promotion criteria and approve deployments"
-        actions={
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleRefresh}
-            className="gap-2"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            Refresh
-          </Button>
-        }
-      />
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleRefresh}
+          className="gap-2"
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+          Refresh
+        </Button>
+      </div>
 
       {/* Summary Stats */}
       <motion.section
@@ -338,7 +332,7 @@ export default function ReleaseGatePage() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => router.push("/experiments")}
+                onClick={() => router.push("/healing/experiments")}
                 className="gap-1.5"
               >
                 Go to Experiments

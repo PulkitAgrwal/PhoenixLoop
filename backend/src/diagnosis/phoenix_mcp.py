@@ -353,7 +353,7 @@ class PhoenixMCPClient:
         self,
         name: str,
         template_messages: list[dict],
-        model_name: str = "gemini-2.0-flash",
+        model_name: str = "gemini-2.5-flash",
     ) -> UpsertResult | None:
         """Create or update a prompt version.
 
