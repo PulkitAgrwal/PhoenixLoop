@@ -13,7 +13,10 @@ concurrency:
 # Project-wide deploy targets. Cloud Run service URLs are deterministic
 # from project number + service name + region, so hardcoding the backend
 # URL here is safe and lets the frontend bake it at build time without
-# needing a job-to-job artifact handoff.
+# needing a job-to-job artifact handoff. PHOENIX_BASE_URL is intentionally
+# scoped to deploy-frontend only — placing it at workflow level would
+# bleed into backend-tests where pydantic-settings reads it from
+# os.environ even when ``_env_file=None`` is passed.
 env:
   GCP_PROJECT: phoenixloop
   GCP_REGION: us-central1
@@ -21,7 +24,6 @@ env:
   BACKEND_SERVICE: phoenixloop-backend
   FRONTEND_SERVICE: phoenixloop-frontend
   BACKEND_URL: https://phoenixloop-backend-856079316421.us-central1.run.app
-  PHOENIX_BASE_URL: https://app.phoenix.arize.com/s/kunalpatra18
   RUNTIME_SA: phoenixloop-runtime@phoenixloop.iam.gserviceaccount.com
 
 jobs:
@@ -301,6 +303,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [secret-scan, backend-tests, backend-lint, frontend-lint, frontend-typecheck, frontend-build]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    env:
+      PHOENIX_BASE_URL: https://app.phoenix.arize.com/s/kunalpatra18
     permissions:
       contents: read
       id-token: write
