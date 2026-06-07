@@ -339,9 +339,15 @@ jobs:
           cache-to: type=gha,mode=max,scope=frontend
 
       - name: Deploy revision
+        # --service-account is required: without it Cloud Run defaults
+        # to the project's Compute Engine SA, and the deploy SA needs
+        # iam.serviceAccountUser on whatever SA the service runs as.
+        # We grant that on phoenixloop-runtime (self-impersonation) but
+        # not on the default Compute SA — so reuse the runtime SA here.
         run: |
           gcloud run deploy ${{ env.FRONTEND_SERVICE }} \
             --image=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.AR_REPO }}/frontend:${{ github.sha }} \
             --region=${{ env.GCP_REGION }} \
             --project=${{ env.GCP_PROJECT }} \
+            --service-account=${{ env.RUNTIME_SA }} \
             --quiet
