@@ -1416,7 +1416,7 @@ async def _seed_default_prompt(db: aiosqlite.Connection) -> None:
         db,
         Prompt(
             prompt_identifier="support-agent",
-            description="AcmeFlow customer support agent",
+            description="Helios customer support agent",
             active_version_id=None,
             created_at=now,
             updated_at=now,

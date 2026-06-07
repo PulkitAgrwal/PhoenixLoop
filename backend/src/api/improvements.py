@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 import aiosqlite
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from src.api.dependencies import PaginationParams, get_db_session, get_request_id
@@ -130,10 +130,25 @@ async def create_improvement(
 @router.post("/improvements/{trigger_id}/actions/analyze")
 async def analyze_improvement(
     trigger_id: str,
+    request: Request,
     request_id: str = Depends(get_request_id),
     db: aiosqlite.Connection = Depends(get_db_session),
 ) -> ApiResponse:
-    """Run MCP-backed root cause diagnosis on an improvement trigger."""
+    """Diagnose a recurring failure cluster and synthesize a candidate patch.
+
+    Diagnosis is delegated to an ADK sub-agent whose toolbelt is Phoenix
+    MCP (see ``backend/src/agent/diagnosis_agent.py``). The agent fetches
+    failing spans + their eval annotations via MCP and emits a structured
+    diagnosis. When the MCP toolset isn't available (no PHOENIX_API_KEY,
+    or the agent path errors), we fall back to the deterministic
+    service-side ``diagnose()`` so the endpoint still produces a useful
+    result.
+
+    Patch synthesis stays on ``generate_proposal()`` — one Gemini call
+    tagged ``patch_synthesis``, separate from the diagnosis_agent turns
+    so the per-purpose token accounting is grep-friendly.
+    """
+    from src.agent.diagnosis_agent import run_diagnosis_agent
     from src.agent.prompts import get_production_prompt
     from src.db import get_improvement_trigger, update_improvement_trigger
     from src.diagnosis.phoenix_mcp import PhoenixMCPClient
@@ -146,25 +161,42 @@ async def analyze_improvement(
             ok=False, error="Improvement trigger not found", request_id=request_id
         )
 
-    mcp_client = PhoenixMCPClient()
-
-    # Resolve the production prompt locally (post-spec-0 the local DB is the
-    # source of truth; passing it down avoids the Phoenix MCP fallback warning)
+    mcp_toolset = getattr(request.app.state, "phoenix_mcp_toolset", None)
     current_prompt_text, _ = await get_production_prompt(db)
 
-    # Run root cause diagnosis
-    diagnosis = await diagnose(trigger, mcp_client, current_prompt=current_prompt_text)
+    diagnosis: dict
+    if mcp_toolset is not None:
+        diagnosis = await run_diagnosis_agent(trigger, mcp_toolset)
+        # ``mcp_status == "agent_fallback"`` means the agent path ran but
+        # didn't produce usable structured output — drop to the legacy
+        # path so the endpoint still returns something credible.
+        if diagnosis.get("mcp_status") == "agent_fallback":
+            logger.warning(
+                "Diagnosis agent fell back for trigger %s — running service-side diagnose()",
+                trigger_id,
+            )
+            mcp_client = PhoenixMCPClient()
+            diagnosis = await diagnose(
+                trigger, mcp_client, current_prompt=current_prompt_text
+            )
+    else:
+        logger.info(
+            "No Phoenix MCP toolset on app.state — using service-side diagnose()"
+        )
+        mcp_client = PhoenixMCPClient()
+        diagnosis = await diagnose(
+            trigger, mcp_client, current_prompt=current_prompt_text
+        )
+
     trigger.diagnosis_json = diagnosis
     trigger.status = "diagnosed"
     trigger.updated_at = datetime.now(timezone.utc).isoformat()
 
-    # Generate patch proposal. Pass ``db`` so the candidate is persisted as a
-    # local prompt_versions row — the release-gate approve flow needs that FK
-    # to flip ``prompts.active_version_id`` once the candidate is promoted.
+    proposal_mcp_client = PhoenixMCPClient()
     proposal = await generate_proposal(
         trigger,
         diagnosis,
-        mcp_client,
+        proposal_mcp_client,
         current_prompt=current_prompt_text,
         db=db,
     )
@@ -175,9 +207,10 @@ async def analyze_improvement(
     await update_improvement_trigger(db, trigger)
 
     logger.info(
-        "Analysis complete for trigger %s: diagnosis confidence=%.2f",
+        "Analysis complete for trigger %s: diagnosis confidence=%.2f via %s",
         trigger_id,
         diagnosis.get("confidence", 0.0),
+        "agent" if diagnosis.get("mcp_status") == "completed" else "service",
     )
 
     return ApiResponse(

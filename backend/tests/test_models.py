@@ -224,7 +224,7 @@ class TestAgentRun:
             status="completed",
             created_at="2025-01-01T00:00:00Z",
         )
-        assert run.agent_name == "acmeflow_support_agent"
+        assert run.agent_name == "helios_support_agent"
         assert run.agent_version == "1.0.0"
         assert run.tool_calls_json == []
         assert run.trace_id is None

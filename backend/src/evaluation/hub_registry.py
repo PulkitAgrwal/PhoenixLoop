@@ -47,7 +47,7 @@ EVALUATOR_CONFIGS: tuple[EvaluatorConfig, ...] = (
     EvaluatorConfig(
         name="policy_compliance",
         description=(
-            "Checks if agent complies with AcmeFlow policies "
+            "Checks if agent complies with Helios policies "
             "(refund, escalation, privacy)"
         ),
         eval_type="llm_judge",

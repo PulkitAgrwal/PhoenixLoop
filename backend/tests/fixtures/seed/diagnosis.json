@@ -1,0 +1,14 @@
+{
+  "failure_pattern": "Refund explanations omit POL-REFUND policy citations",
+  "root_cause": "The current prompt requires policy citations 'whenever you reference a policy' but does not explicitly bind that requirement to refund-category responses. The agent treats general refund explanations (without a specific policy lookup) as exempt and skips the citation, producing answers like 'refunds are processed in 5-10 business days' with no POL-XXX reference.",
+  "evidence_summary": "Two runs (seed-run-fail-001, seed-run-fail-002) on refund-category tickets returned answers with citations=[] and were marked fail by citation_presence. Both runs called get_customer_context but skipped search_policy — the prompt does not require a policy lookup on refund tickets that do not promise a specific refund.",
+  "evidence": [
+    "seed-run-fail-001: refund explanation with no POL-XXX citation",
+    "seed-run-fail-002: refund timing answer with no POL-XXX citation"
+  ],
+  "confidence": 0.88,
+  "suggested_fix": "Append to the Response Quality Rules: 'For any refund-category response, you MUST call search_policy and cite at least one POL-REFUND-XXX policy ID — even when explaining timing, eligibility windows, or general refund rules. A vague \"refund policy\" reference is not a citation.'",
+  "mcp_tools_used": ["get-spans", "get-span-annotations"],
+  "mcp_status": "completed",
+  "elapsed_ms": 6800
+}

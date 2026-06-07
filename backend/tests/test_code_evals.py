@@ -29,7 +29,7 @@ def make_run(
         response_json=response_json or {
             "answer": "test",
             "citations": ["refunds.md"],
-            "tools_used": ["lookup_customer"],
+            "tools_used": ["get_customer_context"],
             "escalated": False,
             "confidence": 0.9,
         },
@@ -44,7 +44,7 @@ def make_ticket(category: str = "refund", body: str = "I want a refund") -> Supp
     """Create a test SupportTicket with sensible defaults."""
     return SupportTicket(
         ticket_id="TKT-001",
-        customer_id="CUST-001",
+        customer_id="cus_AAAA0001",
         category=category,
         subject="Test ticket",
         body=body,
@@ -141,7 +141,7 @@ class TestToolSequenceEvaluator:
     async def test_pass_refund_with_required_tool(self) -> None:
         evaluator = ToolSequenceEvaluator()
         run = make_run(tool_calls=[
-            {"tool_name": "check_refund_eligibility", "input": {}, "output": {}},
+            {"tool_name": "get_customer_context", "input": {}, "output": {}},
         ])
         ticket = make_ticket(category="refund")
         result = await evaluator.evaluate(run, ticket)
@@ -152,12 +152,12 @@ class TestToolSequenceEvaluator:
     async def test_fail_refund_missing_tool(self) -> None:
         evaluator = ToolSequenceEvaluator()
         run = make_run(tool_calls=[
-            {"tool_name": "lookup_customer", "input": {}, "output": {}},
+            {"tool_name": "search_policy", "input": {}, "output": {}},
         ])
         ticket = make_ticket(category="refund")
         result = await evaluator.evaluate(run, ticket)
         assert result.outcome == "fail"
-        assert "check_refund_eligibility" in result.explanation
+        assert "get_customer_context" in result.explanation
 
     @pytest.mark.asyncio
     async def test_pass_ambiguous_no_requirements(self) -> None:
@@ -182,15 +182,21 @@ class TestRefundGuardEvaluator:
             response_json={
                 "answer": "Your refund will be processed within 5 business days.",
                 "citations": ["refunds.md"],
-                "tools_used": ["check_refund_eligibility"],
+                "tools_used": ["get_customer_context"],
                 "escalated": False,
                 "confidence": 0.95,
             },
             tool_calls=[
                 {
-                    "tool_name": "check_refund_eligibility",
-                    "input": {"customer_id": "CUST-001"},
-                    "output": {"eligible": True, "reason": "within_policy"},
+                    "tool_name": "get_customer_context",
+                    "input": {"customer_id": "cus_AAAA0001"},
+                    "output": {
+                        "found": True,
+                        "entitlements": {
+                            "refund_eligible": True,
+                            "refund_reason": "within_policy",
+                        },
+                    },
                 },
             ],
         )
@@ -214,7 +220,7 @@ class TestRefundGuardEvaluator:
         ticket = make_ticket()
         result = await evaluator.evaluate(run, ticket)
         assert result.outcome == "fail"
-        assert "check_refund_eligibility" in result.explanation
+        assert "get_customer_context" in result.explanation
 
     @pytest.mark.asyncio
     async def test_pass_no_refund_language(self) -> None:
@@ -239,22 +245,28 @@ class TestRefundGuardEvaluator:
             response_json={
                 "answer": "We'll refund your purchase immediately.",
                 "citations": [],
-                "tools_used": ["check_refund_eligibility"],
+                "tools_used": ["get_customer_context"],
                 "escalated": False,
                 "confidence": 0.9,
             },
             tool_calls=[
                 {
-                    "tool_name": "check_refund_eligibility",
-                    "input": {"customer_id": "CUST-001"},
-                    "output": {"eligible": False, "reason": "outside_policy"},
+                    "tool_name": "get_customer_context",
+                    "input": {"customer_id": "cus_AAAA0001"},
+                    "output": {
+                        "found": True,
+                        "entitlements": {
+                            "refund_eligible": False,
+                            "refund_reason": "outside_policy",
+                        },
+                    },
                 },
             ],
         )
         ticket = make_ticket()
         result = await evaluator.evaluate(run, ticket)
         assert result.outcome == "fail"
-        assert "eligible=true" in result.explanation
+        assert "refund_eligible" in result.explanation
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +304,7 @@ class TestPrivacyGuardEvaluator:
                 "confidence": 0.9,
             },
         )
-        # Ticket is for CUST-001 (Alice), but response contains Bob's email
+        # Ticket is for cus_AAAA0001 (Alice), but response contains Bob's email
         ticket = make_ticket()
         result = await evaluator.evaluate(run, ticket)
         assert result.outcome == "fail"
@@ -310,7 +322,7 @@ class TestPrivacyGuardEvaluator:
                 "confidence": 0.9,
             },
         )
-        # Ticket is for CUST-001 (Alice) — her own email is fine
+        # Ticket is for cus_AAAA0001 (Alice) — her own email is fine
         ticket = make_ticket()
         result = await evaluator.evaluate(run, ticket)
         assert result.outcome == "pass"

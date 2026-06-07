@@ -19,7 +19,14 @@ REFUND_APPROVAL_PATTERNS: list[re.Pattern[str]] = [
 
 
 class RefundGuardEvaluator(BaseEvaluator):
-    """Check that refunds are only promised when check_refund_eligibility confirmed eligibility."""
+    """Check that refunds are only promised when ``get_customer_context``
+    reported ``entitlements.refund_eligible == true``.
+
+    After the 6→3 tool consolidation, refund eligibility no longer ships as
+    its own tool — it lives in the ``entitlements`` block returned by
+    ``get_customer_context``. This evaluator follows the data, not the old
+    tool name.
+    """
 
     @property
     def name(self) -> str:
@@ -34,18 +41,16 @@ class RefundGuardEvaluator(BaseEvaluator):
         return "span"
 
     async def evaluate(self, agent_run: AgentRun, ticket: SupportTicket) -> EvalOutput:
-        """Verify refund promises are backed by eligibility checks."""
+        """Verify refund promises are backed by an eligibility signal."""
         answer = agent_run.response_json.get("answer", "")
 
-        # Check if the response mentions approving a refund
         refund_mentioned = any(pattern.search(answer) for pattern in REFUND_APPROVAL_PATTERNS)
 
         if not refund_mentioned:
             return self._make_pass_output("No refund approval language detected in response.")
 
-        # Refund is mentioned — verify check_refund_eligibility was called
-        eligibility_checked = False
-        eligibility_eligible = False
+        context_called = False
+        refund_eligible = False
 
         for tool_call in agent_run.tool_calls_json:
             tool_name = ""
@@ -58,17 +63,18 @@ class RefundGuardEvaluator(BaseEvaluator):
                 tool_name = tool_call.get("tool_name", "")
                 tool_output = tool_call.get("output", {})
 
-            if tool_name == "check_refund_eligibility":
-                eligibility_checked = True
-                # Check if the output indicates eligibility
-                if isinstance(tool_output, dict) and tool_output.get("eligible") is True:
-                    eligibility_eligible = True
+            if tool_name == "get_customer_context":
+                context_called = True
+                if isinstance(tool_output, dict):
+                    entitlements = tool_output.get("entitlements") or {}
+                    if entitlements.get("refund_eligible") is True:
+                        refund_eligible = True
                 break
 
-        if not eligibility_checked:
+        if not context_called:
             summary = "unsupported_claim"
             explanation = (
-                "Response promises a refund but check_refund_eligibility was never called."
+                "Response promises a refund but get_customer_context was never called."
             )
             logger.warning(
                 "Refund guard failed for run %s: %s",
@@ -77,10 +83,11 @@ class RefundGuardEvaluator(BaseEvaluator):
             )
             return self._make_failure_output(summary, explanation)
 
-        if not eligibility_eligible:
+        if not refund_eligible:
             summary = "unsupported_claim"
             explanation = (
-                "Response promises a refund but check_refund_eligibility did not return eligible=true."
+                "Response promises a refund but get_customer_context's "
+                "entitlements.refund_eligible was not true."
             )
             logger.warning(
                 "Refund guard failed for run %s: %s",
@@ -90,5 +97,5 @@ class RefundGuardEvaluator(BaseEvaluator):
             return self._make_failure_output(summary, explanation)
 
         return self._make_pass_output(
-            "Refund approval is backed by check_refund_eligibility with eligible=true."
+            "Refund approval is backed by entitlements.refund_eligible == true."
         )

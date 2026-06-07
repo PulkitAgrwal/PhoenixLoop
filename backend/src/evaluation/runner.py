@@ -11,8 +11,9 @@ import asyncio
 import hashlib
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
-from typing import Awaitable, Protocol
+from typing import Any, Awaitable, Protocol
 
 from phoenix.client import Client
 
@@ -55,13 +56,29 @@ CODE_EVALUATORS: list[type[BaseEvaluator]] = [
     LatencyBudgetEvaluator,
 ]
 
-# Combined LLM-backed evaluators. Each one makes ONE Gemini call and returns
-# multiple EvalOutputs. Keeping these as instance factories (rather than
-# importing instances) preserves the symmetry with CODE_EVALUATORS.
-COMBINED_EVALUATORS: list[type] = [
-    CombinedLLMJudges,
-    CombinedToolEvals,
-]
+
+def _active_combined_evaluators() -> list[type]:
+    """Combined LLM-backed evaluators, gated by ``ENABLE_LLM_TOOL_EVALS``.
+
+    The LLM-judge bundle always runs — it's the headline quality signal.
+    The Phoenix tool-eval bundle is opt-in: after the 6→3 tool consolidation
+    the deterministic code evaluators (tool_sequence + refund_guard +
+    privacy_guard) catch the same regressions, so paying a second Gemini
+    call per ticket is wasteful. ``ENABLE_LLM_TOOL_EVALS=true`` re-enables
+    it for the rare case (e.g. demoing the LLM tool-eval surface) where
+    its output matters.
+    """
+    from src.config import get_settings
+
+    evaluators: list[type] = [CombinedLLMJudges]
+    if get_settings().enable_llm_tool_evals:
+        evaluators.append(CombinedToolEvals)
+    return evaluators
+
+
+# Pre-computed at import time so call-sites that iterate it for tests /
+# introspection don't pay the settings lookup every call.
+COMBINED_EVALUATORS: list[type] = _active_combined_evaluators()
 
 
 def compute_failure_key(evaluator_name: str, failure_summary: str) -> str:
@@ -197,7 +214,7 @@ async def run_all_evals(
     ]
     combined_tasks: list[Awaitable[list[EvalOutput]]] = [
         _run_combined_eval(eval_cls(), agent_run, ticket)
-        for eval_cls in COMBINED_EVALUATORS
+        for eval_cls in _active_combined_evaluators()
     ]
 
     all_results = await asyncio.gather(*code_tasks, *combined_tasks)
@@ -221,3 +238,69 @@ async def run_all_evals(
     )
 
     return results
+
+
+async def run_all_evals_streaming(
+    agent_run: AgentRun,
+    ticket: SupportTicket,
+    phoenix_client: Client | None = None,
+) -> AsyncIterator[dict[str, Any]]:
+    """Run evaluators in parallel and yield results as each task completes.
+
+    Yields ``{"type": "eval_result", "result": EvalResult}`` per evaluator.
+    Annotation writes are scheduled as background tasks so the streamed
+    eval result doesn't wait on Phoenix Cloud round trips.
+    """
+    code_tasks: list[Awaitable[list[EvalOutput]]] = [
+        _run_code_eval(eval_cls(), agent_run, ticket) for eval_cls in CODE_EVALUATORS
+    ]
+    combined_tasks: list[Awaitable[list[EvalOutput]]] = [
+        _run_combined_eval(eval_cls(), agent_run, ticket)
+        for eval_cls in _active_combined_evaluators()
+    ]
+
+    pending_annotations: list[asyncio.Task] = []
+    pass_count = fail_count = error_count = 0
+
+    for fut in asyncio.as_completed([*code_tasks, *combined_tasks]):
+        outputs = await fut
+        for output in outputs:
+            result = _output_to_eval_result(output, agent_run)
+            if result.outcome == "pass":
+                pass_count += 1
+            elif result.outcome == "fail":
+                fail_count += 1
+            else:
+                error_count += 1
+            # Schedule the Phoenix annotation write off the streaming path.
+            # `client.spans.log_span_annotations(sync=False)` already returns
+            # quickly, but wrapping in `asyncio.to_thread` keeps any latent
+            # blocking work off the event loop.
+            pending_annotations.append(
+                asyncio.create_task(
+                    asyncio.to_thread(
+                        _write_annotation, output, agent_run, phoenix_client
+                    )
+                )
+            )
+            yield {"type": "eval_result", "result": result}
+
+    # Don't block the caller on annotation writes — they continue in the
+    # background. We do attach a logger so failures get visibility.
+    for task in pending_annotations:
+        task.add_done_callback(_log_annotation_task_failure)
+
+    logger.info(
+        "Eval run complete for %s: %d pass, %d fail, %d error (annotations in background)",
+        agent_run.agent_run_id,
+        pass_count,
+        fail_count,
+        error_count,
+    )
+
+
+def _log_annotation_task_failure(task: asyncio.Task) -> None:
+    """Surface annotation-write failures in logs without raising."""
+    exc = task.exception()
+    if exc is not None:
+        logger.warning("Background annotation write failed: %s", exc)

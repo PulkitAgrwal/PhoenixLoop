@@ -1,0 +1,13 @@
+{
+  "improvement_trigger_id": "seed-trig-cit-001",
+  "failure_key": "citation_presence::refund_response_missing_policy_id",
+  "trigger_reason": "threshold_repeated_failure",
+  "occurrence_count": 2,
+  "example_run_ids_json": ["seed-run-fail-001", "seed-run-fail-002"],
+  "diagnosis_json": null,
+  "patch_proposal_json": null,
+  "regression_examples_json": [],
+  "status": "diagnosed",
+  "created_at": "2026-06-01T09:26:00+00:00",
+  "updated_at": "2026-06-01T09:27:00+00:00"
+}

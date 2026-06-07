@@ -1,5 +1,6 @@
 """PhoenixLoop FastAPI application."""
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -18,6 +19,7 @@ from src.api.improvements import router as improvements_router
 from src.api.middleware import RequestIdMiddleware, register_exception_handlers
 from src.api.prompts import router as prompts_router
 from src.api.release_gate import router as release_gate_router
+from src.api.stats import router as stats_router
 from src.api.tickets import router as tickets_router
 from src.config import get_settings
 from src.db import init_db
@@ -63,9 +65,80 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         logger.warning("Annotation config registration failed (non-fatal): %s", exc)
 
-    logger.info("PhoenixLoop ready")
+    # Build the Phoenix MCP toolset once at startup so its stdio session
+    # outlives any single request. ADK's MCPSessionManager caches the
+    # session per-toolset; per-request agents share the warm connection.
+    app.state.phoenix_mcp_toolset = None
+    try:
+        from src.agent.mcp_tools import build_phoenix_mcp_toolset
+
+        toolset = build_phoenix_mcp_toolset()
+        if toolset is not None:
+            # Pre-warm: forces the stdio_client to spawn `npx`, the MCP
+            # handshake to complete, and the tools list to be cached. Pays
+            # the ~60s cold start now instead of on the first user request.
+            tools = await toolset.get_tools()
+            app.state.phoenix_mcp_toolset = toolset
+            logger.info(
+                "Phoenix MCP toolset warmed at startup (tool count=%d)",
+                len(tools),
+            )
+    except Exception as exc:
+        logger.warning(
+            "Phoenix MCP toolset warm-up failed (non-fatal): %s", exc
+        )
+        app.state.phoenix_mcp_toolset = None
+
+    # Auto-seed runs in the background so the API is reachable immediately.
+    # Live mode takes 60-90s (real Gemini calls + diagnosis + experiment);
+    # blocking the lifespan on it forces docker-compose health-checks to
+    # fail before the seed finishes. Idempotent — full_loop_seed short-
+    # circuits when agent_runs is non-empty.
+    db_path = settings.database_url.replace("sqlite:///", "")
+    mcp_toolset = app.state.phoenix_mcp_toolset
+
+    async def _seed_in_background() -> None:
+        try:
+            from src.api.seed import full_loop_seed
+            from src.db import get_db
+
+            async with get_db(db_path) as db:
+                summary = await full_loop_seed(db, mcp_toolset=mcp_toolset)
+            if not summary.get("skipped"):
+                logger.info("auto-seed complete: %s", summary)
+            else:
+                logger.info("auto-seed skipped (already populated)")
+        except Exception as exc:
+            logger.warning(
+                "auto-seed failed (non-fatal): %s", exc, exc_info=True
+            )
+
+    if settings.skip_autoseed:
+        app.state.seed_task = None
+        logger.info("PhoenixLoop ready (auto-seed disabled via SKIP_AUTOSEED)")
+    else:
+        app.state.seed_task = asyncio.create_task(_seed_in_background())
+        logger.info("PhoenixLoop ready (auto-seed running in background)")
     yield
     logger.info("PhoenixLoop shutting down")
+
+    # Cancel the background seed if still running, so shutdown doesn't hang.
+    seed_task = getattr(app.state, "seed_task", None)
+    if seed_task is not None and not seed_task.done():
+        seed_task.cancel()
+        try:
+            await seed_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    toolset = getattr(app.state, "phoenix_mcp_toolset", None)
+    if toolset is not None:
+        try:
+            await toolset.close()
+        except Exception as exc:
+            logger.warning(
+                "Phoenix MCP toolset close failed (non-fatal): %s", exc
+            )
 
 
 app = FastAPI(title="PhoenixLoop API", version="0.1.0", lifespan=lifespan)
@@ -90,4 +163,5 @@ app.include_router(release_gate_router, prefix="/api")
 app.include_router(prompts_router, prefix="/api")
 app.include_router(activity_router, prefix="/api")
 app.include_router(config_router, prefix="/api")
+app.include_router(stats_router, prefix="/api")
 app.include_router(demo_router, prefix="/api")

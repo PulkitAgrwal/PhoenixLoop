@@ -163,7 +163,7 @@ class AgentRun(BaseModel):
     agent_run_id: str
     conversation_session_id: str
     ticket_id: str
-    agent_name: str = "acmeflow_support_agent"
+    agent_name: str = "helios_support_agent"
     agent_version: str = "1.0.0"
     prompt_version: str
     trace_id: str | None = None
@@ -362,6 +362,20 @@ class HealthResponse(BaseModel):
     service: str
     version: str
     checks: dict[str, HealthCheck]
+
+
+class StatsResponse(BaseModel):
+    """Headline counts surfaced on the landing-page stats strip.
+
+    All four counts are pure SQL — no Gemini calls — so the landing page
+    can render server-side on every request without burning the token
+    budget. Source-of-truth is the local SQLite DB.
+    """
+
+    agent_runs_traced: int
+    evaluators_wired: int
+    mcp_tool_calls_per_run_avg: float
+    prompts_auto_promoted: int
 
 
 class ConfigResponse(BaseModel):

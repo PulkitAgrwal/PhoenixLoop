@@ -1,0 +1,62 @@
+[
+  {
+    "ticket_id": "seed-TKT-001",
+    "customer_id": "cus_5WvnX4nq",
+    "category": "refund",
+    "subject": "Refund for last month's Pro charge",
+    "body": "Hi, my last monthly charge on May 1 was for $29 but I've decided to switch tools. I'd like a refund please — I haven't used the platform much this billing cycle.",
+    "metadata_json": {"seed_label": "demo_refund_eligible"},
+    "created_at": "2026-06-01T09:00:00+00:00",
+    "updated_at": "2026-06-01T09:00:00+00:00"
+  },
+  {
+    "ticket_id": "seed-TKT-002",
+    "customer_id": "cus_XIEADwIa",
+    "category": "refund",
+    "subject": "Refund our Enterprise annual fee",
+    "body": "We've moved to a different platform and need a refund for the rest of our Enterprise annual subscription. Renewed Jan 10 2026.",
+    "metadata_json": {"seed_label": "demo_enterprise_escalate"},
+    "created_at": "2026-06-01T09:05:00+00:00",
+    "updated_at": "2026-06-01T09:05:00+00:00"
+  },
+  {
+    "ticket_id": "seed-TKT-003",
+    "customer_id": "cus_Jmvq4zyy",
+    "category": "admin_access",
+    "subject": "Add a second admin to our Business workspace",
+    "body": "I'm the owner of our Business plan workspace and I want to add my co-founder as an admin. Is there a limit on Business?",
+    "metadata_json": {"seed_label": "demo_admin_policy"},
+    "created_at": "2026-06-01T09:10:00+00:00",
+    "updated_at": "2026-06-01T09:10:00+00:00"
+  },
+  {
+    "ticket_id": "seed-TKT-004",
+    "customer_id": "cus_MAMb9OM3",
+    "category": "billing",
+    "subject": "Is there a free tier?",
+    "body": "I'm on the Free plan — what features does it include and what would I gain from upgrading to Pro?",
+    "metadata_json": {"seed_label": "demo_free_plan_question"},
+    "created_at": "2026-06-01T09:15:00+00:00",
+    "updated_at": "2026-06-01T09:15:00+00:00"
+  },
+  {
+    "ticket_id": "seed-TKT-FAIL-1",
+    "customer_id": "cus_Nh3rZUr7",
+    "category": "refund",
+    "subject": "Refund question",
+    "body": "I want to understand how refunds work for monthly Pro plans. Can you walk me through the rules?",
+    "metadata_json": {"seed_label": "demo_citation_failure_twin_1"},
+    "created_at": "2026-06-01T09:20:00+00:00",
+    "updated_at": "2026-06-01T09:20:00+00:00"
+  },
+  {
+    "ticket_id": "seed-TKT-FAIL-2",
+    "customer_id": "cus_CbaPTAUZ",
+    "category": "refund",
+    "subject": "Refund timing",
+    "body": "How quickly do refunds get processed once they're approved? I've been waiting.",
+    "metadata_json": {"seed_label": "demo_citation_failure_twin_2"},
+    "created_at": "2026-06-01T09:25:00+00:00",
+    "updated_at": "2026-06-01T09:25:00+00:00"
+  }
+]

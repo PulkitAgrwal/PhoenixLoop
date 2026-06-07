@@ -8,11 +8,17 @@ from src.models import AgentRun, SupportTicket, TicketCategory
 logger = logging.getLogger(__name__)
 
 # Required tools per ticket category
+#
+# After the 6→3 tool consolidation, ``get_customer_context`` is the single
+# data-gathering tool — it carries refund eligibility, the subscription, and
+# the profile. Every category whose answer depends on customer facts now
+# requires it. ``create_escalation`` and ``search_policy`` requirements are
+# unchanged.
 REQUIRED_TOOLS: dict[str, list[str]] = {
-    TicketCategory.REFUND.value: ["check_refund_eligibility"],
+    TicketCategory.REFUND.value: ["get_customer_context"],
     TicketCategory.LEGAL.value: ["create_escalation"],
     TicketCategory.OUTAGE_CREDIT.value: ["search_policy"],
-    TicketCategory.ADMIN_ACCESS.value: ["lookup_customer"],
+    TicketCategory.ADMIN_ACCESS.value: ["get_customer_context"],
 }
 
 

@@ -1,4 +1,4 @@
-"""OpenInference instrumentation setup for Phoenix tracing."""
+"""Phoenix OpenTelemetry tracer setup."""
 
 import logging
 
@@ -6,13 +6,16 @@ logger = logging.getLogger(__name__)
 
 
 def setup_instrumentation() -> None:
-    """Configure OpenTelemetry with Phoenix as the trace exporter.
+    """Configure Phoenix tracing via ``phoenix.otel.register``.
 
-    Sets up:
-    - OTLP/HTTP exporter pointing at Phoenix Cloud collector
-    - OpenInference ADK auto-instrumentor for Google ADK traces
-    - Phoenix project name from settings via ``PHOENIX_PROJECT_NAME`` resource
-      attribute
+    Uses the canonical Phoenix SDK idiom: one ``register(...)`` call sets up
+    the OTLP/HTTP exporter, a :class:`BatchSpanProcessor` (instead of the
+    synchronous ``SimpleSpanProcessor`` that blocked every span on a network
+    round-trip), the project resource attribute, and auto-instruments every
+    installed OpenInference instrumentor — currently ``google-adk`` and
+    ``google-genai``. That second one matters: the LLM judges and the
+    proposal generator call ``google.genai`` directly, so without it ~40% of
+    LLM traffic never reaches Phoenix.
     """
     from src.config import get_settings
 
@@ -23,46 +26,27 @@ def setup_instrumentation() -> None:
         return
 
     try:
-        from opentelemetry import trace
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-            OTLPSpanExporter,
-        )
-        from opentelemetry.sdk.resources import Resource
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from phoenix.otel import register
 
-        # Configure OTLP/HTTP exporter to Phoenix Cloud collector.
-        # Phoenix Cloud authenticates OTLP requests with an Authorization Bearer header.
-        endpoint = f"{settings.phoenix_collector_endpoint}/v1/traces"
-        exporter = OTLPSpanExporter(
-            endpoint=endpoint,
-            headers={
-                "Authorization": f"Bearer {settings.phoenix_api_key}",
-            },
+        register(
+            project_name=settings.phoenix_project_name,
+            endpoint=f"{settings.phoenix_collector_endpoint}/v1/traces",
+            headers={"Authorization": f"Bearer {settings.phoenix_api_key}"},
+            protocol="http/protobuf",
+            auto_instrument=True,
+            batch=True,
+            verbose=False,
         )
-
-        resource = Resource.create(
-            {"project.name": settings.phoenix_project_name}
-        )
-        provider = TracerProvider(resource=resource)
-        provider.add_span_processor(SimpleSpanProcessor(exporter))
-        trace.set_tracer_provider(provider)
-
-        # Set up OpenInference Google ADK instrumentor.
-        # Verified via context7: the import path is
-        # openinference.instrumentation.google_adk.GoogleADKInstrumentor
-        from openinference.instrumentation.google_adk import (
-            GoogleADKInstrumentor,
-        )
-
-        GoogleADKInstrumentor().instrument(tracer_provider=provider)
 
         logger.info(
-            "OpenInference instrumentation configured, exporting to %s (project: %s)",
-            endpoint,
+            "Phoenix instrumentation registered (endpoint=%s/v1/traces, "
+            "project=%s)",
+            settings.phoenix_collector_endpoint,
             settings.phoenix_project_name,
         )
     except ImportError as exc:
-        logger.warning("Instrumentation packages not available: %s", exc)
+        logger.warning("Phoenix instrumentation packages not available: %s", exc)
     except Exception as exc:
-        logger.error("Failed to set up instrumentation: %s", exc, exc_info=True)
+        logger.error(
+            "Failed to set up Phoenix instrumentation: %s", exc, exc_info=True
+        )

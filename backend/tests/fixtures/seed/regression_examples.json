@@ -1,0 +1,34 @@
+[
+  {
+    "regression_example_id": "seed-reg-001",
+    "improvement_trigger_id": "seed-trig-cit-001",
+    "input_ticket_json": {
+      "ticket_id": "reg-TKT-001",
+      "customer_id": "cus_Nh3rZUr7",
+      "category": "refund",
+      "subject": "How do refunds work?",
+      "body": "Quick question on how monthly refunds are handled."
+    },
+    "expected_behavior": "Response must cite at least one POL-REFUND-XXX policy ID even when explaining timing or eligibility generically.",
+    "failure_mode_targeted": "citation_presence::refund_response_missing_policy_id",
+    "phoenix_dataset_id": "regression-citation_presence-refund-policy-id",
+    "uploaded_at": null,
+    "created_at": "2026-06-01T09:27:45+00:00"
+  },
+  {
+    "regression_example_id": "seed-reg-002",
+    "improvement_trigger_id": "seed-trig-cit-001",
+    "input_ticket_json": {
+      "ticket_id": "reg-TKT-002",
+      "customer_id": "cus_CbaPTAUZ",
+      "category": "refund",
+      "subject": "How long do refunds take?",
+      "body": "What's the typical refund processing time?"
+    },
+    "expected_behavior": "Response must cite at least one POL-REFUND-XXX policy ID even when answering a general timing question.",
+    "failure_mode_targeted": "citation_presence::refund_response_missing_policy_id",
+    "phoenix_dataset_id": "regression-citation_presence-refund-policy-id",
+    "uploaded_at": null,
+    "created_at": "2026-06-01T09:27:50+00:00"
+  }
+]

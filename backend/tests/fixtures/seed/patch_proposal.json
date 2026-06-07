@@ -1,0 +1,10 @@
+{
+  "patch_type": "prompt_constraint",
+  "proposed_change": "For any refund-category response, you MUST call search_policy and cite at least one POL-REFUND-XXX policy ID — even when explaining timing, eligibility windows, or general refund rules. A vague reference to \"the refund policy\" is not a citation.",
+  "diff_summary": "Require POL-REFUND-XXX citation on every refund-category response, including general explanations.",
+  "insertion_point": "Response Quality Rules",
+  "original_text": "Whenever you reference a policy, cite it by its Policy ID (format: `POL-XXX-NNN`, e.g. `POL-REFUND-001`). A general phrase like \"our refund policy\" is NOT a citation.",
+  "proposed_text": "Whenever you reference a policy, cite it by its Policy ID (format: `POL-XXX-NNN`, e.g. `POL-REFUND-001`). A general phrase like \"our refund policy\" is NOT a citation. For any refund-category response, you MUST call search_policy and cite at least one POL-REFUND-XXX policy ID — even when explaining timing, eligibility windows, or general refund rules.",
+  "candidate_prompt_version": "v1.1-refund-citation-required",
+  "local_prompt_version_id": "seed-pv-candidate-001"
+}

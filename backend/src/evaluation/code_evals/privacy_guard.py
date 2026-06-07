@@ -17,9 +17,9 @@ EMAIL_PATTERN: re.Pattern[str] = re.compile(
 # In production this would come from a data store; here we define a small
 # lookup that tests (and the demo seed data) can rely on.
 CUSTOMER_DATA: dict[str, dict[str, str]] = {
-    "CUST-001": {"name": "Alice Johnson", "email": "alice@example.com"},
-    "CUST-002": {"name": "Bob Smith", "email": "bob@example.com"},
-    "CUST-003": {"name": "Charlie Brown", "email": "charlie@example.com"},
+    "cus_AAAA0001": {"name": "Alice Johnson", "email": "alice@example.com"},
+    "cus_BBBB0001": {"name": "Bob Smith", "email": "bob@example.com"},
+    "cus_CCCC0001": {"name": "Charlie Brown", "email": "charlie@example.com"},
 }
 
 

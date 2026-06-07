@@ -1,0 +1,11 @@
+{
+  "failure_key": "citation_presence::refund_response_missing_policy_id",
+  "failure_summary": "Refund explanations omitting POL-REFUND citations",
+  "evaluator_name": "citation_presence",
+  "occurrence_count": 2,
+  "first_seen_at": "2026-06-01T09:20:08+00:00",
+  "last_seen_at": "2026-06-01T09:25:08+00:00",
+  "example_run_ids_json": ["seed-run-fail-001", "seed-run-fail-002"],
+  "is_active": true,
+  "computed_at": "2026-06-01T09:25:10+00:00"
+}

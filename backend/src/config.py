@@ -40,6 +40,18 @@ class Settings(BaseSettings):
     release_score_threshold: float = 0.75
     latency_budget_ms: int = 10000
 
+    # Demo / auto-seed
+    # ``lightweight_demo`` makes the lifespan auto-seed read pre-recorded
+    # JSON fixtures from ``backend/tests/fixtures/seed/`` instead of making
+    # any Gemini calls. Used for UI iteration without burning the token
+    # budget. Live mode (default) goes through the full pipeline.
+    lightweight_demo: bool = False
+    enable_llm_tool_evals: bool = False
+
+    # When true, the lifespan skips the background full_loop_seed task so the
+    # DB stays empty after a fresh `docker compose up -v` reset.
+    skip_autoseed: bool = False
+
 
 @lru_cache
 def get_settings() -> Settings:

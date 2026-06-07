@@ -1,0 +1,262 @@
+[
+  {
+    "agent_run_id": "seed-run-001",
+    "conversation_session_id": "seed-sess-001",
+    "ticket_id": "seed-TKT-001",
+    "agent_name": "helios_support_agent",
+    "agent_version": "1.0.0",
+    "prompt_version": "production",
+    "trace_id": "fixt0000000000000000000000000001",
+    "root_span_id": "fixtspan00000001",
+    "phoenix_session_id": "seed-sess-001",
+    "response_json": {
+      "answer": "Per refund policy [POL-REFUND-001], monthly Pro subscriptions are eligible for a full refund within 30 days of the most recent charge. Your last payment was on 2026-05-01 (29 days ago), which is within the window — I've approved a $29 refund. You should see it back on your card in 5–10 business days.",
+      "citations": ["POL-REFUND-001"],
+      "tools_used": ["get_customer_context", "retrieve_similar_resolutions", "search_policy"],
+      "escalated": false,
+      "escalation_reason": null,
+      "confidence": 0.92,
+      "examples_used": ["dataset-ex-refund-eligible-1"]
+    },
+    "tool_calls_json": [
+      {
+        "tool_name": "get_customer_context",
+        "input": {"customer_id": "cus_5WvnX4nq"},
+        "output": {
+          "found": true,
+          "profile": {"name": "Maya Cole", "plan": "Pro"},
+          "entitlements": {"refund_eligible": true, "refund_reason": "Within 30-day window (last payment 29 days ago).", "refund_type": "full", "refund_amount": 29.0, "days_since_last_payment": 29}
+        },
+        "status": "success",
+        "latency_ms": 8
+      },
+      {
+        "tool_name": "retrieve_similar_resolutions",
+        "input": {"category": "refund", "brief": "monthly Pro refund within window"},
+        "output": {"found": true, "dataset": "successful-resolutions", "examples": [{"id": "dataset-ex-refund-eligible-1", "category": "refund"}]},
+        "status": "success",
+        "latency_ms": 42
+      },
+      {
+        "tool_name": "search_policy",
+        "input": {"query": "monthly refund window", "category": "refund"},
+        "output": {"found": true, "source": "refunds.md", "excerpts": ["POL-REFUND-001: Monthly subscriptions may be refunded within 30 days of the most recent charge."]},
+        "status": "success",
+        "latency_ms": 4
+      }
+    ],
+    "status": "success",
+    "latency_ms": 4180,
+    "token_count_input": null,
+    "token_count_output": null,
+    "prompt_version_id": null,
+    "created_at": "2026-06-01T09:00:05+00:00"
+  },
+  {
+    "agent_run_id": "seed-run-002",
+    "conversation_session_id": "seed-sess-002",
+    "ticket_id": "seed-TKT-002",
+    "agent_name": "helios_support_agent",
+    "agent_version": "1.0.0",
+    "prompt_version": "production",
+    "trace_id": "fixt0000000000000000000000000002",
+    "root_span_id": "fixtspan00000002",
+    "phoenix_session_id": "seed-sess-002",
+    "response_json": {
+      "answer": "Enterprise plan refunds are handled by our Account Management team per refund policy [POL-REFUND-003]. I've escalated this to them with reference ESC-fixture02, and they'll reach out within one business day. They can structure a pro-rata refund against your remaining annual term.",
+      "citations": ["POL-REFUND-003"],
+      "tools_used": ["get_customer_context", "search_policy", "create_escalation"],
+      "escalated": true,
+      "escalation_reason": "Enterprise refund — must be handled by Account Management per POL-REFUND-003.",
+      "confidence": 0.94,
+      "examples_used": ["dataset-ex-enterprise-refund-1"]
+    },
+    "tool_calls_json": [
+      {
+        "tool_name": "get_customer_context",
+        "input": {"customer_id": "cus_XIEADwIa"},
+        "output": {
+          "found": true,
+          "profile": {"name": "Marcus Rivera", "plan": "Enterprise"},
+          "entitlements": {"refund_eligible": false, "refund_reason": "Enterprise refunds are handled exclusively by Account Management."}
+        },
+        "status": "success",
+        "latency_ms": 7
+      },
+      {
+        "tool_name": "search_policy",
+        "input": {"query": "enterprise refund", "category": "refund"},
+        "output": {"found": true, "source": "refunds.md", "excerpts": ["POL-REFUND-003: Enterprise refunds are handled by Account Management exclusively."]},
+        "status": "success",
+        "latency_ms": 5
+      },
+      {
+        "tool_name": "create_escalation",
+        "input": {"ticket_id": "seed-TKT-002", "reason": "Enterprise refund — must be handled by Account Management per POL-REFUND-003.", "target_team": "Account Management"},
+        "output": {"escalation_id": "ESC-fixture02", "ticket_id": "seed-TKT-002", "target_team": "Account Management", "status": "created"},
+        "status": "success",
+        "latency_ms": 3
+      }
+    ],
+    "status": "success",
+    "latency_ms": 4500,
+    "token_count_input": null,
+    "token_count_output": null,
+    "prompt_version_id": null,
+    "created_at": "2026-06-01T09:05:05+00:00"
+  },
+  {
+    "agent_run_id": "seed-run-003",
+    "conversation_session_id": "seed-sess-003",
+    "ticket_id": "seed-TKT-003",
+    "agent_name": "helios_support_agent",
+    "agent_version": "1.0.0",
+    "prompt_version": "production",
+    "trace_id": "fixt0000000000000000000000000003",
+    "root_span_id": "fixtspan00000003",
+    "phoenix_session_id": "seed-sess-003",
+    "response_json": {
+      "answer": "On the Business plan you can have unlimited admins per [POL-ADMIN-002]. As the workspace owner, you can promote your co-founder via Settings → Members → → change role to Admin. Let me know if you'd like the exact steps.",
+      "citations": ["POL-ADMIN-002"],
+      "tools_used": ["get_customer_context", "search_policy"],
+      "escalated": false,
+      "escalation_reason": null,
+      "confidence": 0.9,
+      "examples_used": []
+    },
+    "tool_calls_json": [
+      {
+        "tool_name": "get_customer_context",
+        "input": {"customer_id": "cus_Jmvq4zyy"},
+        "output": {"found": true, "profile": {"plan": "Business", "workspace_role": "owner"}},
+        "status": "success",
+        "latency_ms": 6
+      },
+      {
+        "tool_name": "search_policy",
+        "input": {"query": "business admin limit", "category": "admin_access"},
+        "output": {"found": true, "source": "admin_access.md", "excerpts": ["POL-ADMIN-002: Business plan allows unlimited admins."]},
+        "status": "success",
+        "latency_ms": 5
+      }
+    ],
+    "status": "success",
+    "latency_ms": 3800,
+    "token_count_input": null,
+    "token_count_output": null,
+    "prompt_version_id": null,
+    "created_at": "2026-06-01T09:10:05+00:00"
+  },
+  {
+    "agent_run_id": "seed-run-004",
+    "conversation_session_id": "seed-sess-004",
+    "ticket_id": "seed-TKT-004",
+    "agent_name": "helios_support_agent",
+    "agent_version": "1.0.0",
+    "prompt_version": "production",
+    "trace_id": "fixt0000000000000000000000000004",
+    "root_span_id": "fixtspan00000004",
+    "phoenix_session_id": "seed-sess-004",
+    "response_json": {
+      "answer": "Free plan includes a single workspace, one admin (you), and up to 3 collaborators. Pro at $29/month adds unlimited collaborators, custom integrations, and priority support per [POL-PLAN-001]. Happy to walk through any specific feature.",
+      "citations": ["POL-PLAN-001"],
+      "tools_used": ["get_customer_context", "search_policy"],
+      "escalated": false,
+      "escalation_reason": null,
+      "confidence": 0.85,
+      "examples_used": []
+    },
+    "tool_calls_json": [
+      {
+        "tool_name": "get_customer_context",
+        "input": {"customer_id": "cus_MAMb9OM3"},
+        "output": {"found": true, "profile": {"plan": "Free"}},
+        "status": "success",
+        "latency_ms": 6
+      },
+      {
+        "tool_name": "search_policy",
+        "input": {"query": "plan features", "category": "billing"},
+        "output": {"found": true, "source": "billing.md", "excerpts": ["POL-PLAN-001: Free plan includes 1 admin and 3 collaborators; Pro adds unlimited collaborators."]},
+        "status": "success",
+        "latency_ms": 4
+      }
+    ],
+    "status": "success",
+    "latency_ms": 3500,
+    "token_count_input": null,
+    "token_count_output": null,
+    "prompt_version_id": null,
+    "created_at": "2026-06-01T09:15:05+00:00"
+  },
+  {
+    "agent_run_id": "seed-run-fail-001",
+    "conversation_session_id": "seed-sess-fail-001",
+    "ticket_id": "seed-TKT-FAIL-1",
+    "agent_name": "helios_support_agent",
+    "agent_version": "1.0.0",
+    "prompt_version": "production",
+    "trace_id": "fixt0000000000000000000000000f01",
+    "root_span_id": "fixtspan0000f001",
+    "phoenix_session_id": "seed-sess-fail-001",
+    "response_json": {
+      "answer": "For monthly Pro subscriptions, you can request a refund within 30 days of the most recent charge. Outside that window, we generally can't refund. Cancellations stop future charges but don't refund past ones.",
+      "citations": [],
+      "tools_used": ["get_customer_context"],
+      "escalated": false,
+      "escalation_reason": null,
+      "confidence": 0.6,
+      "examples_used": []
+    },
+    "tool_calls_json": [
+      {
+        "tool_name": "get_customer_context",
+        "input": {"customer_id": "cus_Nh3rZUr7"},
+        "output": {"found": true, "profile": {"plan": "Pro"}},
+        "status": "success",
+        "latency_ms": 7
+      }
+    ],
+    "status": "success",
+    "latency_ms": 3100,
+    "token_count_input": null,
+    "token_count_output": null,
+    "prompt_version_id": null,
+    "created_at": "2026-06-01T09:20:05+00:00"
+  },
+  {
+    "agent_run_id": "seed-run-fail-002",
+    "conversation_session_id": "seed-sess-fail-002",
+    "ticket_id": "seed-TKT-FAIL-2",
+    "agent_name": "helios_support_agent",
+    "agent_version": "1.0.0",
+    "prompt_version": "production",
+    "trace_id": "fixt0000000000000000000000000f02",
+    "root_span_id": "fixtspan0000f002",
+    "phoenix_session_id": "seed-sess-fail-002",
+    "response_json": {
+      "answer": "Once approved, refunds are typically returned to your original payment method within 5–10 business days. If yours has been pending longer than that, let me know the order ID and I'll dig in.",
+      "citations": [],
+      "tools_used": ["get_customer_context"],
+      "escalated": false,
+      "escalation_reason": null,
+      "confidence": 0.55,
+      "examples_used": []
+    },
+    "tool_calls_json": [
+      {
+        "tool_name": "get_customer_context",
+        "input": {"customer_id": "cus_CbaPTAUZ"},
+        "output": {"found": true, "profile": {"plan": "Pro"}},
+        "status": "success",
+        "latency_ms": 8
+      }
+    ],
+    "status": "success",
+    "latency_ms": 3050,
+    "token_count_input": null,
+    "token_count_output": null,
+    "prompt_version_id": null,
+    "created_at": "2026-06-01T09:25:05+00:00"
+  }
+]

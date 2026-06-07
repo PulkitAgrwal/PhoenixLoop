@@ -5,8 +5,10 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import aiosqlite
+import pandas as pd
 
 from src.config import get_settings
+from src.diagnosis.phoenix_mcp import PhoenixMCPClient
 from src.models import (
     EvalResult,
     FailureAggregate,
@@ -16,6 +18,11 @@ from src.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def get_phoenix_mcp_client() -> PhoenixMCPClient:
+    """Factory wrapper so tests can monkeypatch the client."""
+    return PhoenixMCPClient()
 
 # Critical failure types that trigger immediately (from PRD Section 7.4)
 CRITICAL_FAILURE_TYPES = {
@@ -75,6 +82,7 @@ async def update_aggregates(
     """
     from src.db import get_failure_aggregate, upsert_failure_aggregate
 
+    settings = get_settings()
     updated_keys: list[str] = []
     now = datetime.now(timezone.utc).isoformat()
 
@@ -123,7 +131,95 @@ async def update_aggregates(
             updated.occurrence_count,
         )
 
+        # Auto-promote to Phoenix dataset when threshold reached.
+        if updated.occurrence_count >= settings.repeated_failure_count:
+            await _promote_to_phoenix_dataset(updated, result, db)
+
     return updated_keys
+
+
+MAX_PROMOTION_EXAMPLES = 5
+
+
+async def _promote_to_phoenix_dataset(
+    aggregate: FailureAggregate,
+    result: EvalResult,
+    db: aiosqlite.Connection,
+) -> None:
+    """Push the last N failing examples for this cluster to Phoenix.
+
+    Pulls up to MAX_PROMOTION_EXAMPLES agent_runs matching this failure_key
+    (deduplicated by agent_run_id), then pushes them as a single multi-row
+    DataFrame. This grows the regression dataset to a useful size per
+    threshold trip instead of one example per trip.
+
+    Best-effort: any failure in MCP/Phoenix calls is logged but does NOT
+    block the aggregation pipeline.
+    """
+    from src.db import get_agent_run
+
+    try:
+        candidate_ids = list(aggregate.example_run_ids_json or [])
+        if result.agent_run_id and result.agent_run_id not in candidate_ids:
+            candidate_ids.append(result.agent_run_id)
+
+        seen: set[str] = set()
+        recent_ids: list[str] = []
+        for run_id in reversed(candidate_ids):
+            if run_id in seen:
+                continue
+            seen.add(run_id)
+            recent_ids.append(run_id)
+            if len(recent_ids) >= MAX_PROMOTION_EXAMPLES:
+                break
+
+        rows: list[dict] = []
+        for run_id in recent_ids:
+            agent_run = await get_agent_run(db, run_id)
+            if agent_run is None:
+                logger.debug(
+                    "Skipping missing agent_run %s during promotion", run_id
+                )
+                continue
+            rows.append(
+                {
+                    "input": agent_run.response_json or {},
+                    "expected_output": {
+                        "failure_summary": aggregate.failure_summary,
+                        "failure_key": aggregate.failure_key,
+                    },
+                }
+            )
+
+        if not rows:
+            logger.warning(
+                "Cannot promote: no agent_runs resolved for failure %s",
+                aggregate.failure_key,
+            )
+            return
+
+        examples_df = pd.DataFrame(rows)
+
+        client = get_phoenix_mcp_client()
+        dataset_name = f"recurrent-failures-{aggregate.evaluator_name}"
+        await client.add_dataset_examples(
+            dataset_name=dataset_name,
+            examples_df=examples_df,
+            input_keys=["input"],
+            output_keys=["expected_output"],
+        )
+        logger.info(
+            "Promoted failure %s to dataset '%s' (rows=%d)",
+            aggregate.failure_key,
+            dataset_name,
+            len(rows),
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to promote failure %s to Phoenix dataset: %s",
+            aggregate.failure_key,
+            exc,
+        )
 
 
 async def check_thresholds(

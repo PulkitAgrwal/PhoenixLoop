@@ -283,6 +283,15 @@ async def generate_proposal(
         current_prompt=current_prompt[:PROMPT_TRUNCATION_LIMIT],
     )
 
+    logger.info(
+        "gemini_call_purpose=patch_synthesis trigger_id=%s",
+        trigger.improvement_trigger_id,
+        extra={
+            "gemini_call_purpose": "patch_synthesis",
+            "trigger_id": trigger.improvement_trigger_id,
+        },
+    )
+
     try:
         proposal = await _call_gemini_patch(prompt)
         result = proposal.model_dump()

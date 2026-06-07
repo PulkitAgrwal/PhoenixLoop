@@ -29,12 +29,33 @@ TOOL_EVAL_NAMES: tuple[str, ...] = (
 )
 
 AVAILABLE_TOOLS = [
-    {"name": "search_policy", "description": "Search AcmeFlow policy documents by query and category"},
-    {"name": "lookup_customer", "description": "Look up customer profile by customer_id"},
-    {"name": "lookup_subscription", "description": "Look up subscription details by customer_id"},
-    {"name": "check_refund_eligibility", "description": "Check if a customer is eligible for a refund"},
-    {"name": "create_escalation", "description": "Escalate a ticket to a specialized team"},
-    {"name": "draft_customer_response", "description": "Draft a structured response to the customer"},
+    {
+        "name": "search_policy",
+        "description": (
+            "Search Helios policy documents by query and category — "
+            "returns matching paragraphs and the source filename."
+        ),
+    },
+    {
+        "name": "get_customer_context",
+        "description": (
+            "Return the customer profile, subscription, computed "
+            "entitlements (incl. refund_eligible + reason), and recent "
+            "ticket history in a single call."
+        ),
+    },
+    {
+        "name": "retrieve_similar_resolutions",
+        "description": (
+            "Fetch up to 3 prior successfully-resolved tickets from the "
+            "'successful-resolutions' Phoenix dataset, scoped to the given "
+            "category. Used as in-context exemplars before drafting."
+        ),
+    },
+    {
+        "name": "create_escalation",
+        "description": "Escalate a ticket to a specialized team.",
+    },
 ]
 
 
@@ -55,7 +76,7 @@ class CombinedToolEvalResult(BaseModel):
 
 
 EVAL_PROMPT_TEMPLATE = """\
-You are a strict evaluator for the tool-use behavior of an AcmeFlow \
+You are a strict evaluator for the tool-use behavior of a Helios \
 customer-support AI agent. You must return ONE JSON object containing three \
 independent verdicts. Do NOT wrap the JSON in markdown fences. Do NOT include \
 any text before or after the JSON.
@@ -87,7 +108,7 @@ tool calls. Label is "pass" if and only if score >= {pass_threshold}.
 Did the agent choose the right tools for this query? Were any necessary tools \
 omitted? Were any unnecessary tools called? If no tools were called at all, \
 judge whether that omission was appropriate (e.g., a pure FAQ might need none, \
-but a refund request always needs check_refund_eligibility).
+but a refund request always needs get_customer_context for the entitlements).
 
 ## 2. tool_invocation
 Were tool arguments correct, complete, and derived from the ticket? Were any \

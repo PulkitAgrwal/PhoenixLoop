@@ -414,6 +414,146 @@ async def list_audit_events(
     )
 
 
+@router.post("/demo/full-loop")
+async def full_loop_demo(
+    request_id: str = Depends(get_request_id),
+    db: aiosqlite.Connection = Depends(get_db_session),
+) -> ApiResponse:
+    """Synthesize 5 failure-cluster runs to walk the healing loop in <90s.
+
+    Designed for the demo video and the "Watch it heal" CTA. Synthesizes
+    repeated failures with a shared ``failure_key`` so the threshold logic
+    creates a ``pending_diagnosis`` trigger deterministically.
+    """
+    from src.db import (
+        get_ticket,
+        insert_agent_run,
+        insert_conversation_session,
+        insert_eval_result,
+        insert_ticket,
+    )
+    from src.diagnosis.failure_aggregator import check_thresholds, update_aggregates
+    from src.models import (
+        AgentRun,
+        AnnotationLevel,
+        ConversationSession,
+        EvalResult,
+        EvalType,
+        ToolCallRecord,
+    )
+
+    SYNTHESIZED_RUNS = 5
+    SYNTHETIC_FAILURE_KEY = "citation_presence::demo-synthetic-cluster"
+    DEMO_TICKET_ID = "demo-ticket-001"
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # Ensure the demo ticket exists (full-loop is safe to call before /seed too).
+    if await get_ticket(db, DEMO_TICKET_ID) is None:
+        await insert_ticket(
+            db,
+            SupportTicket(
+                ticket_id=DEMO_TICKET_ID,
+                customer_id="cust-100",
+                category=TicketCategory.REFUND,
+                subject="Refund for duplicate charge",
+                body="Demo ticket for full-loop synthesis.",
+                metadata_json={},
+                created_at=now_iso,
+                updated_at=now_iso,
+            ),
+        )
+
+    synthesized_run_ids: list[str] = []
+    all_eval_results: list[EvalResult] = []
+
+    for i in range(SYNTHESIZED_RUNS):
+        session_id = str(uuid.uuid4())
+        await insert_conversation_session(
+            db,
+            ConversationSession(
+                conversation_session_id=session_id,
+                ticket_id=DEMO_TICKET_ID,
+                started_at=now_iso,
+                turn_count=1,
+            ),
+        )
+
+        run_id = str(uuid.uuid4())
+        agent_run = AgentRun(
+            agent_run_id=run_id,
+            conversation_session_id=session_id,
+            ticket_id=DEMO_TICKET_ID,
+            agent_name="helios_support_agent",
+            agent_version="1.0.0",
+            prompt_version="production",
+            trace_id=None,
+            root_span_id=None,
+            phoenix_session_id=None,
+            response_json={
+                "answer": f"[synthetic demo failure #{i + 1}] No citation provided",
+                "citations": [],
+                "tools_used": ["search_policy"],
+                "escalated": False,
+                "escalation_reason": None,
+                "confidence": 0.4,
+            },
+            tool_calls_json=[
+                ToolCallRecord(
+                    tool_name="search_policy",
+                    input={"query": "refund window"},
+                    output={"found": False, "excerpts": [], "source": None},
+                    status="success",
+                    latency_ms=42,
+                )
+            ],
+            status="success",
+            latency_ms=120,
+            token_count_input=None,
+            token_count_output=None,
+            prompt_version_id=None,
+            created_at=now_iso,
+        )
+        await insert_agent_run(db, agent_run)
+        synthesized_run_ids.append(run_id)
+
+        eval_result = EvalResult(
+            eval_result_id=str(uuid.uuid4()),
+            agent_run_id=run_id,
+            evaluator_name="citation_presence",
+            eval_type=EvalType.CODE,
+            outcome="fail",
+            score=0.0,
+            explanation="Synthetic demo failure: missing citation",
+            failure_key=SYNTHETIC_FAILURE_KEY,
+            failure_summary="Demo cluster: citation missing on policy answer",
+            annotation_level=AnnotationLevel.SPAN,
+            created_at=now_iso,
+        )
+        await insert_eval_result(db, eval_result)
+        all_eval_results.append(eval_result)
+
+    await update_aggregates(all_eval_results, db)
+    triggers = await check_thresholds(db, all_eval_results)
+
+    logger.info(
+        "full-loop demo: synthesized %d runs, created %d trigger(s)",
+        SYNTHESIZED_RUNS,
+        len(triggers),
+    )
+
+    return ApiResponse(
+        ok=True,
+        data={
+            "synthesized_runs": SYNTHESIZED_RUNS,
+            "synthesized_run_ids": synthesized_run_ids,
+            "failure_key": SYNTHETIC_FAILURE_KEY,
+            "trigger_created": len(triggers) > 0,
+            "trigger_ids": [t.improvement_trigger_id for t in triggers],
+        },
+        request_id=request_id,
+    )
+
+
 async def _probe_phoenix(settings: Settings) -> HealthCheck:
     """Probe Phoenix Cloud via a lightweight authenticated GET."""
     if not settings.phoenix_api_key:

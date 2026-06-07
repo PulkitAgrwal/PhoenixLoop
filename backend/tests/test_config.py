@@ -44,6 +44,7 @@ class TestSettings:
     def test_phoenix_defaults(self):
         """Verify Phoenix Cloud default URLs."""
         settings = Settings(
+            _env_file=None,
             google_api_key="test",
             phoenix_api_key="test",
         )
