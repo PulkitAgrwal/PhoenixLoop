@@ -212,7 +212,149 @@ gcloud run services update phoenixloop-backend \
   needed at runtime.
 - **Redeploy on code changes.** Re-run the buildx + `gcloud run deploy`
   block; Cloud Run swaps revisions with zero downtime. Frontend changes
-  need the rebuild (env vars are baked at build time).
+  need the rebuild (env vars are baked at build time). Or wire up CI/CD
+  below so every push to `main` redeploys automatically.
+
+---
+
+## Auto-deploy from GitHub Actions (Workload Identity Federation)
+
+The `.github/workflows/ci.yml` workflow runs validation jobs on every push
+and PR, then on push to `main` (and only after every check passes) builds
++ pushes both images to Artifact Registry and rolls a new Cloud Run
+revision. Authentication uses Workload Identity Federation (WIF) — no
+long-lived service-account keys live in GitHub secrets.
+
+### One-time GCP setup (project owner runs once)
+
+```bash
+PROJECT=phoenixloop
+PROJECT_NUMBER=$(gcloud projects describe $PROJECT --format='value(projectNumber)')
+RUNTIME_SA=phoenixloop-runtime@$PROJECT.iam.gserviceaccount.com
+GITHUB_REPO=PulkitAgrwal/PhoenixLoop
+
+# 1. Enable IAM Credentials API (needed for WIF impersonation)
+gcloud services enable iamcredentials.googleapis.com --project=$PROJECT
+
+# 2. Grant the runtime SA the extra roles needed for deploy
+for ROLE in roles/run.admin roles/artifactregistry.writer; do
+  gcloud projects add-iam-policy-binding $PROJECT \
+    --member="serviceAccount:$RUNTIME_SA" \
+    --role="$ROLE" --condition=None --quiet
+done
+
+# Allow the runtime SA to "act as" itself when attached to a Cloud Run service
+gcloud iam service-accounts add-iam-policy-binding $RUNTIME_SA \
+  --member="serviceAccount:$RUNTIME_SA" \
+  --role=roles/iam.serviceAccountUser \
+  --project=$PROJECT --quiet
+
+# 3. Create the Workload Identity Pool + GitHub OIDC provider, locked to this repo
+gcloud iam workload-identity-pools create github-pool \
+  --project=$PROJECT --location=global --display-name="GitHub Actions Pool"
+
+gcloud iam workload-identity-pools providers create-oidc github \
+  --project=$PROJECT --location=global \
+  --workload-identity-pool=github-pool --display-name="GitHub Actions" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref" \
+  --attribute-condition="assertion.repository == '$GITHUB_REPO'" \
+  --issuer-uri=https://token.actions.githubusercontent.com
+
+# 4. Let GitHub Actions for this repo impersonate the runtime SA
+gcloud iam service-accounts add-iam-policy-binding $RUNTIME_SA \
+  --project=$PROJECT \
+  --role=roles/iam.workloadIdentityUser \
+  --member="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/attribute.repository/$GITHUB_REPO"
+
+# 5. Print the two values to paste into GitHub repo secrets
+echo "GCP_WIF_PROVIDER=projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/providers/github"
+echo "GCP_DEPLOY_SA=$RUNTIME_SA"
+```
+
+### GitHub repo secrets
+
+Add these two secrets at **Settings → Secrets and variables → Actions → New repository secret** (or via gh CLI):
+
+```bash
+gh secret set GCP_WIF_PROVIDER --body "projects/856079316421/locations/global/workloadIdentityPools/github-pool/providers/github"
+gh secret set GCP_DEPLOY_SA --body "phoenixloop-runtime@phoenixloop.iam.gserviceaccount.com"
+```
+
+The exact `GCP_WIF_PROVIDER` value is what step 5 above prints.
+
+### Workflow shape
+
+The pipeline is structured for fail-fast feedback and parallelism:
+
+```
+secret-scan ─┐
+backend-tests ├──┐
+backend-lint   │  │
+frontend-lint  ├──┼─► docker-build-pr  (PRs only, verify-only)
+frontend-tc    │  │
+frontend-build ┘  │
+                   └─► deploy-backend  ┐  (push to main only,
+                       deploy-frontend ┴   parallel after checks)
+```
+
+All 6 validation jobs run fully in parallel; on push to `main` the two
+deploy jobs run in parallel after every check passes. Caches:
+
+| Cache | Key | What it speeds up |
+|---|---|---|
+| `actions/setup-python cache: pip` | `backend/requirements.txt` hash | pip installs |
+| `actions/setup-node cache: npm` | `frontend/package-lock.json` hash | npm ci |
+| `actions/cache` for Next.js | lockfile + sha, restore-keys fall back | `next build` incremental |
+| `actions/cache` for Gitleaks binary | version-pinned | Gitleaks install |
+| `cache-from/cache-to: type=gha` | per-scope (`backend`, `frontend`) | Docker layer reuse for both PR verify and prod deploys |
+
+Backend tests (~2.5 min) are the long pole; everything else finishes
+inside that window.
+
+### Branch protection (run once as the repo owner)
+
+To require PRs and passing checks instead of direct pushes to `main`:
+
+```bash
+gh api -X PUT "repos/PulkitAgrwal/PhoenixLoop/branches/main/protection" \
+  --input - <<'EOF'
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": [
+      "Secret Scan",
+      "Backend Tests",
+      "Backend Lint",
+      "Frontend Lint",
+      "Frontend Typecheck",
+      "Frontend Build",
+      "Docker Build (PR verification)"
+    ]
+  },
+  "enforce_admins": true,
+  "required_pull_request_reviews": {
+    "required_approving_review_count": 0,
+    "dismiss_stale_reviews": false,
+    "require_code_owner_reviews": false
+  },
+  "restrictions": null,
+  "allow_force_pushes": false,
+  "allow_deletions": false,
+  "required_linear_history": false,
+  "required_conversation_resolution": false
+}
+EOF
+```
+
+This forces every change through a PR, blocks force pushes and branch
+deletion, and gates merges on the 7 listed CI jobs. `enforce_admins:true`
+applies the rule to repo admins too (set `false` to let admins bypass).
+`required_approving_review_count: 0` means you can self-merge — useful
+for a solo project; raise to `1` if you bring contributors on.
+
+---
+
+## Legacy / alternative platforms
 
 For local dev or Railway deploy, see the sections below.
 
