@@ -2,6 +2,10 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { TopNav } from "@/components/layout/top-nav";
+import { HealingCycleProvider } from "@/components/healing/healing-cycle-context";
+import { HealingCycleModal } from "@/components/healing/healing-cycle-modal";
+import { HealingCycleChip } from "@/components/healing/healing-cycle-chip";
+import { DismissWarningDialog } from "@/components/healing/dismiss-warning-dialog";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -26,10 +30,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         >
           Skip to content
         </a>
-        <TopNav />
-        <main id="main" className="min-h-[calc(100vh-56px)]">
-          {children}
-        </main>
+        <HealingCycleProvider>
+          <TopNav />
+          <main id="main" className="min-h-[calc(100vh-56px)]">
+            {children}
+          </main>
+          <HealingCycleModal />
+          <HealingCycleChip />
+          <DismissWarningDialog />
+        </HealingCycleProvider>
       </body>
     </html>
   );

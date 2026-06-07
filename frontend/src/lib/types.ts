@@ -292,6 +292,16 @@ export interface HealthResponse {
   };
 }
 
+export interface HealingCycle {
+  failure_key: string;
+  failure_aggregates: FailureAggregate[];
+  triggers: ImprovementTrigger[];
+  latest_trigger: ImprovementTrigger | null;
+  experiments: ExperimentRecord[];
+  release_gate_decision: ReleaseGateDecision | null;
+  human_approval: HumanApproval | null;
+}
+
 // Config dump
 export interface ConfigResponse {
   app_env: string;

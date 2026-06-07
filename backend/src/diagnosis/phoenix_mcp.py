@@ -14,6 +14,7 @@ Verified against arize-phoenix-client SDK API (context7, May 2026):
 """
 
 import logging
+from collections.abc import Callable
 from typing import Protocol
 
 import pandas as pd
@@ -91,6 +92,12 @@ class DatasetResult(BaseModel):
 
     dataset_id: str | None = None
     examples_added: int = 0
+
+
+# Uses client.experiments.resume_experiment — confirmed against arize-phoenix-client
+# 1.x on 2026-06-07. log_evaluations does not exist in this SDK version;
+# resume_experiment accepts a task+evaluators closure pair and writes runs+scores
+# into an existing experiment shell identified by experiment_id.
 
 
 class ExperimentResult(BaseModel):
@@ -506,6 +513,99 @@ class PhoenixMCPClient:
                 "Failed to read experiment %s: %s", experiment_id, exc
             )
             return None
+
+    async def log_experiment_runs(
+        self,
+        *,
+        phoenix_experiment_id: str,
+        per_example: list[dict],
+    ) -> bool:
+        """Attach per-example outputs + scores to a Phoenix experiment shell.
+
+        Uses ``client.experiments.resume_experiment`` — the only SDK path that
+        writes runs into an existing shell without re-creating the experiment.
+        ``log_evaluations`` does not exist in arize-phoenix-client 1.x.
+
+        ``per_example`` rows are shaped:
+            {
+                "example_id": str,                # Phoenix DatasetExample id (or local stub)
+                "input": dict,                    # the input we ran on
+                "output": dict,                   # the agent's response
+                "evaluations": list[dict],        # [{name, score, label, explanation}]
+                "latency_ms": int | None,
+            }
+
+        Returns True if the SDK accepted the write, False otherwise. Failure
+        is logged WARN and swallowed — Phoenix-side observability gaps must
+        never break the local SQLite write path.
+        """
+        if self._client is None:
+            return False
+        if not per_example:
+            return True
+        try:
+            import asyncio
+
+            # Build lookup: ticket_id → row (used by the task closure)
+            output_by_ticket: dict[str, dict] = {}
+            eval_by_ticket: dict[str, list[dict]] = {}
+            for row in per_example:
+                ticket_id = row.get("input", {}).get("ticket_id") or row.get("example_id", "")
+                output_by_ticket[ticket_id] = row.get("output") or {}
+                eval_by_ticket[ticket_id] = row.get("evaluations") or []
+
+            def _task(input: dict) -> dict:  # noqa: A002 — name is SDK-mandated
+                tid = input.get("ticket_id", "")
+                return output_by_ticket.get(tid, {"_no_match": True})
+
+            # Build per-evaluator closures; each returns {score, label, explanation}
+            eval_names: set[str] = set()
+            for evals in eval_by_ticket.values():
+                for e in evals:
+                    eval_names.add(e["name"])
+
+            def _make_evaluator(
+                eval_name: str,
+            ) -> Callable[[dict, dict], dict]:
+                def _evaluator(input: dict, output: dict) -> dict:  # noqa: A002
+                    tid = input.get("ticket_id", "")
+                    for e in eval_by_ticket.get(tid, []):
+                        if e["name"] == eval_name:
+                            return {
+                                "score": e.get("score"),
+                                "label": e.get("label"),
+                                "explanation": e.get("explanation"),
+                            }
+                    return {"score": None, "label": "no_data"}
+
+                _evaluator.__name__ = eval_name
+                return _evaluator
+
+            evaluators = {name: _make_evaluator(name) for name in sorted(eval_names)}
+
+            def _log() -> bool:
+                self._client.experiments.resume_experiment(
+                    experiment_id=phoenix_experiment_id,
+                    task=_task,
+                    evaluators=evaluators if evaluators else None,
+                    print_summary=False,
+                )
+                return True
+
+            return await asyncio.to_thread(_log)
+        except AttributeError:
+            logger.warning(
+                "experiments.resume_experiment not exposed by this Phoenix SDK "
+                "version — per-example results stay local only."
+            )
+            return False
+        except Exception as exc:
+            logger.warning(
+                "Failed to log experiment runs for %s: %s",
+                phoenix_experiment_id,
+                exc,
+            )
+            return False
 
 
 # ---------------------------------------------------------------------------

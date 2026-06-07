@@ -128,10 +128,50 @@ export const api = {
         body: JSON.stringify({ reviewer_id: reviewerId, comment }),
       }),
   },
+  healing: {
+    cycle: (failureKey: string) =>
+      fetchApi<import("@/lib/types").HealingCycle>(
+        `/api/healing/cycles/${encodeURIComponent(failureKey)}`,
+      ),
+  },
   demo: {
     seed: () => fetchApi("/api/demo/seed", { method: "POST" }),
     runAll: () => fetchApi("/api/demo/run-all", { method: "POST" }),
     fullLoop: () => fetchApi("/api/demo/full-loop", { method: "POST" }),
+    fullLoopStream: async (
+      onEvent: (e: { type: string; [k: string]: unknown }) => void,
+      signal?: AbortSignal,
+    ): Promise<void> => {
+      const res = await fetch(`${API_URL}/api/demo/full-loop/stream`, {
+        method: "POST",
+        headers: { Accept: "text/event-stream" },
+        signal,
+      });
+      if (!res.ok || !res.body) {
+        throw new Error(`stream failed: HTTP ${res.status}`);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("data: ")) {
+              try {
+                onEvent(JSON.parse(line.slice(6)));
+              } catch {
+                // ignore
+              }
+            }
+          }
+        }
+      }
+    },
   },
   activity: {
     list: (limit = 5) => fetchApi(`/api/activity?limit=${limit}`),

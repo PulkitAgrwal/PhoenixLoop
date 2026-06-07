@@ -6,7 +6,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-import google.genai as genai
 import pandas as pd
 from google.genai import types
 from pydantic import BaseModel
@@ -28,6 +27,7 @@ from src.models import (
     PromptVersion,
     RegressionExample,
 )
+from src.utils.genai_client import make_genai_client
 from src.utils.retry import retry
 
 logger = logging.getLogger(__name__)
@@ -158,7 +158,7 @@ async def _call_gemini_patch(prompt_text: str) -> PatchProposal:
         Parsed PatchProposal from Gemini response.
     """
     settings = get_settings()
-    client = genai.Client(api_key=settings.google_api_key)
+    client = make_genai_client()
     response = client.models.generate_content(
         model=settings.gemini_model,
         contents=prompt_text,
@@ -181,7 +181,7 @@ async def _call_gemini_regression(prompt_text: str) -> list[RegressionTicket]:
         List of parsed RegressionTicket models.
     """
     settings = get_settings()
-    client = genai.Client(api_key=settings.google_api_key)
+    client = make_genai_client()
     response = client.models.generate_content(
         model=settings.gemini_model,
         contents=prompt_text,

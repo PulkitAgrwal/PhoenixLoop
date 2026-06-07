@@ -15,6 +15,7 @@ from src.api.conversations import router as conversations_router
 from src.api.demo import router as demo_router
 from src.api.evals import router as evals_router
 from src.api.experiments import router as experiments_router
+from src.api.healing import router as healing_router
 from src.api.improvements import router as improvements_router
 from src.api.middleware import RequestIdMiddleware, register_exception_handlers
 from src.api.prompts import router as prompts_router
@@ -165,3 +166,4 @@ app.include_router(activity_router, prefix="/api")
 app.include_router(config_router, prefix="/api")
 app.include_router(stats_router, prefix="/api")
 app.include_router(demo_router, prefix="/api")
+app.include_router(healing_router, prefix="/api")

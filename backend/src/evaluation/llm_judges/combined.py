@@ -10,7 +10,6 @@ import json
 import logging
 from typing import Literal
 
-import google.genai as genai
 from google.genai import types
 from phoenix.evals import HALLUCINATION_PROMPT_TEMPLATE, QA_PROMPT_TEMPLATE
 from pydantic import BaseModel, Field
@@ -19,6 +18,7 @@ from src.config import get_settings
 from src.evaluation import EvalOutput
 from src.evaluation.json_repair import LLMJsonParseError, parse_llm_json
 from src.models import AgentRun, SupportTicket
+from src.utils.genai_client import make_genai_client
 from src.utils.retry import retry_on_rate_limit
 
 logger = logging.getLogger(__name__)
@@ -264,7 +264,7 @@ class CombinedLLMJudges:
         sibling combined evaluator can run truly in parallel.
         """
         settings = get_settings()
-        client = genai.Client(api_key=settings.google_api_key)
+        client = make_genai_client()
         response = await client.aio.models.generate_content(
             model=settings.gemini_model,
             contents=prompt,

@@ -92,28 +92,127 @@ Or use the frontend: open [http://localhost:3000](http://localhost:3000) and cli
 
 ## Deploy to Google Cloud Run
 
-PhoenixLoop ships ready for Cloud Run. From repo root:
+Two Cloud Run services in `us-central1`, ephemeral SQLite, Vertex AI via
+Application Default Credentials. Verified end-to-end on `phoenixloop` GCP
+project on 2026-06-07.
+
+### Prerequisites
+
+- A GCP project with billing enabled.
+- gcloud CLI authenticated as a principal with the following roles on the
+  project: `roles/run.admin`, `roles/artifactregistry.admin`,
+  `roles/secretmanager.admin`, `roles/iam.serviceAccountUser`,
+  `roles/serviceusage.serviceUsageConsumer`.
+- A runtime service account (e.g. `phoenixloop-runtime@PROJECT.iam.gserviceaccount.com`)
+  with `roles/aiplatform.user` so it can call Vertex AI.
+- Docker with buildx (for cross-building amd64 images from Apple Silicon).
+
+### One-time setup
 
 ```bash
-gcloud config set project YOUR_PROJECT_ID
-gcloud builds submit --config cloudbuild.yaml
+PROJECT=YOUR_PROJECT_ID
+REGION=us-central1
+RUNTIME_SA=phoenixloop-runtime@$PROJECT.iam.gserviceaccount.com
+
+# 1. Enable required APIs
+gcloud services enable \
+  run.googleapis.com \
+  artifactregistry.googleapis.com \
+  secretmanager.googleapis.com \
+  aiplatform.googleapis.com \
+  --project=$PROJECT
+
+# 2. Create the Artifact Registry repo
+gcloud artifacts repositories create phoenixloop \
+  --repository-format=docker --location=$REGION --project=$PROJECT
+
+# 3. Configure docker auth for the registry
+gcloud auth configure-docker $REGION-docker.pkg.dev --quiet
+
+# 4. Store secrets
+printf '%s' "$PHOENIX_API_KEY" | gcloud secrets create phoenix-api-key --data-file=- --project=$PROJECT
+printf '%s' "$GOOGLE_API_KEY"  | gcloud secrets create google-api-key  --data-file=- --project=$PROJECT
+
+# 5. Grant the runtime SA access to the secrets
+for SECRET in phoenix-api-key google-api-key; do
+  gcloud secrets add-iam-policy-binding $SECRET \
+    --member="serviceAccount:$RUNTIME_SA" \
+    --role=roles/secretmanager.secretAccessor \
+    --project=$PROJECT --quiet
+done
 ```
 
-The build runs `docker build` for both services, pushes to `gcr.io`, and
-deploys to `us-central1` Cloud Run via the manifests in `cloud-run/`.
+### Deploy the backend
 
-Required secrets (create once with `gcloud secrets create ...`):
+```bash
+# Cross-build amd64 from Apple Silicon and push
+cd backend
+docker buildx build --platform=linux/amd64 --push \
+  -t $REGION-docker.pkg.dev/$PROJECT/phoenixloop/backend:latest .
 
-- `phoenix-api-key`
-- `google-api-key`
+# Deploy (PHOENIX_BASE_URL is your workspace URL, e.g. https://app.phoenix.arize.com/s/YOUR_WORKSPACE)
+gcloud run deploy phoenixloop-backend \
+  --image=$REGION-docker.pkg.dev/$PROJECT/phoenixloop/backend:latest \
+  --region=$REGION --project=$PROJECT \
+  --service-account=$RUNTIME_SA \
+  --min-instances=1 --max-instances=1 \
+  --timeout=900 --memory=1Gi --cpu=1 --port=8000 \
+  --allow-unauthenticated \
+  --set-env-vars="GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_PROJECT=$PROJECT,GOOGLE_CLOUD_LOCATION=$REGION,SKIP_AUTOSEED=true,DEMO_FORCE_PENDING_REVIEW=true,DEMO_FORCE_FAILURE=true,PHOENIX_BASE_URL=$PHOENIX_BASE_URL,PHOENIX_COLLECTOR_ENDPOINT=$PHOENIX_BASE_URL,PHOENIX_PROJECT_NAME=phoenixloop,APP_ENV=production,DATABASE_URL=sqlite:////tmp/phoenixloop.db" \
+  --set-secrets="PHOENIX_API_KEY=phoenix-api-key:latest,GOOGLE_API_KEY=google-api-key:latest"
+```
 
-The backend Dockerfile installs Node 20 in addition to Python 3.13 because
-the support agent spawns `npx @arizeai/phoenix-mcp` at runtime for Phoenix
-MCP introspection. The image is ~250 MB compressed.
+Note the backend URL Cloud Run prints. Smoke-test:
 
-After the build completes, point `NEXT_PUBLIC_API_URL` on the frontend
-service at the backend's public URL (or update `cloud-run/frontend.yaml`
-with the resolved hostname).
+```bash
+curl -sf $BACKEND_URL/api/health | jq .
+```
+
+### Deploy the frontend
+
+```bash
+cd ../frontend
+docker buildx build --platform=linux/amd64 --push \
+  --build-arg NEXT_PUBLIC_API_URL=$BACKEND_URL \
+  --build-arg NEXT_PUBLIC_PHOENIX_URL=$PHOENIX_BASE_URL \
+  -t $REGION-docker.pkg.dev/$PROJECT/phoenixloop/frontend:latest .
+
+gcloud run deploy phoenixloop-frontend \
+  --image=$REGION-docker.pkg.dev/$PROJECT/phoenixloop/frontend:latest \
+  --region=$REGION --project=$PROJECT \
+  --min-instances=1 --max-instances=1 \
+  --memory=512Mi --cpu=1 --port=3000 \
+  --allow-unauthenticated
+```
+
+### Wire CORS
+
+The backend's CORS allowlist reads `FRONTEND_URL`. After the frontend deploy
+returns its public URL, set it on the backend:
+
+```bash
+gcloud run services update phoenixloop-backend \
+  --region=$REGION --project=$PROJECT \
+  --update-env-vars=FRONTEND_URL=$FRONTEND_URL
+```
+
+### Caveats
+
+- **Ephemeral SQLite.** The DB lives at `/tmp/phoenixloop.db` inside the
+  container. Every cold start, redeploy, or instance restart wipes it. With
+  `--min-instances=1` the warm instance persists for hours but is not
+  guaranteed across deploys. Acceptable for the demo because each "Watch
+  it heal" cycle generates its own state.
+- **Single instance.** `--max-instances=1` is intentional — SQLite + file
+  locks can't be shared across containers. If you need horizontal scaling
+  you also need to migrate to Cloud SQL.
+- **Vertex ADC.** The runtime SA carries `roles/aiplatform.user` so the
+  Python `google-genai` SDK constructs `Client(vertexai=True)` and the
+  Cloud Run-injected metadata server provides credentials. No SA-key file
+  needed at runtime.
+- **Redeploy on code changes.** Re-run the buildx + `gcloud run deploy`
+  block; Cloud Run swaps revisions with zero downtime. Frontend changes
+  need the rebuild (env vars are baked at build time).
 
 For local dev or Railway deploy, see the sections below.
 

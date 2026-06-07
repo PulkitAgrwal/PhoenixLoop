@@ -493,6 +493,10 @@ async def _seed_live(
     # 6. Release-gate decision.
     try:
         gate_decision = check_promotion_rules(experiment)
+        from src.config import get_settings
+        if get_settings().demo_force_pending_review:
+            from src.experiments.release_gate import coerce_to_pending_review
+            gate_decision = coerce_to_pending_review(gate_decision)
         await insert_release_gate_decision(db, gate_decision)
         summary["release_gate_decision"] = gate_decision.decision.value
         trigger.status = "experiment_complete"

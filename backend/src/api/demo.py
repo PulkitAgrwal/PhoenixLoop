@@ -10,10 +10,11 @@ from pathlib import Path
 
 import aiosqlite
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import StreamingResponse
 
 from src.api.dependencies import PaginationParams, get_db_session, get_request_id
-from src.config import Settings
+from src.config import Settings, get_settings
 from src.models import (
     ApiResponse,
     AuditEvent,
@@ -552,6 +553,44 @@ async def full_loop_demo(
         },
         request_id=request_id,
     )
+
+
+@router.post("/demo/full-loop/stream")
+async def full_loop_stream(
+    request: Request,
+) -> StreamingResponse:
+    """Run the live healing loop as Server-Sent Events.
+
+    Yields one ``data: {...}\\n\\n`` frame per stage so the UI can render a
+    live timeline instead of staring at a blank screen for 90s.
+
+    The DB connection is opened inside ``event_gen`` (not via
+    ``Depends(get_db_session)``) because FastAPI tears down request-scoped
+    dependencies as soon as the route handler returns the
+    ``StreamingResponse`` — which is before the generator has streamed
+    anything. Holding the connection inside the generator binds its
+    lifetime to the response, not the handler.
+    """
+    from src.api._full_loop_events import stream_full_loop
+    from src.db import get_db
+
+    mcp_toolset = getattr(request.app.state, "phoenix_mcp_toolset", None)
+    settings = get_settings()
+    db_path = settings.database_url.replace("sqlite:///", "")
+
+    async def event_gen():
+        try:
+            async with get_db(db_path) as db:
+                async for name, payload in stream_full_loop(db, mcp_toolset=mcp_toolset):
+                    frame = {"type": name, **payload}
+                    yield f"data: {json.dumps(frame)}\n\n"
+            yield 'data: {"type":"done"}\n\n'
+        except Exception as exc:
+            logger.exception("full-loop stream errored")
+            err = {"type": "error", "error": str(exc)[:200]}
+            yield f"data: {json.dumps(err)}\n\n"
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
 
 
 async def _probe_phoenix(settings: Settings) -> HealthCheck:

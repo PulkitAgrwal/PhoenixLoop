@@ -185,6 +185,34 @@ def check_promotion_rules(experiment: ExperimentRecord) -> ReleaseGateDecision:
 # Human Approval Flow
 # ---------------------------------------------------------------------------
 
+def coerce_to_pending_review(
+    decision: ReleaseGateDecision,
+) -> ReleaseGateDecision:
+    """Demo-only: rewrite a decision so it lands in PENDING_HUMAN_REVIEW.
+
+    Flips the decision enum and marks every rule as ``passed=True`` in the
+    rules_detail_json so the UI's gate checklist reads cleanly. Never call
+    this from production code — gate by ``settings.demo_force_pending_review``.
+    """
+    rules = dict(decision.rules_detail_json or {})
+    forced_rules: dict[str, dict[str, object]] = {}
+    for name, rule in rules.items():
+        forced = dict(rule) if isinstance(rule, dict) else {}
+        forced["passed"] = True
+        forced["_demo_forced"] = True
+        forced_rules[name] = forced
+
+    return decision.model_copy(update={
+        "decision": ReleaseDecision.PENDING_HUMAN_REVIEW,
+        "promotion_rules_passed": len(forced_rules),
+        "rules_detail_json": forced_rules,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Human Approval Flow
+# ---------------------------------------------------------------------------
+
 async def approve_release(
     decision_id: str,
     reviewer_id: str,

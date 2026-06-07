@@ -51,6 +51,7 @@ from src.models import (
     ExperimentRecord,
     ExperimentStatus,
     ImprovementTrigger,
+    RegressionExample,
     SupportTicket,
 )
 
@@ -93,6 +94,13 @@ class PhoenixMCPProtocol(Protocol):
     async def read_experiment_results(
         self, experiment_id: str
     ) -> object | None: ...
+
+    async def log_experiment_runs(
+        self,
+        *,
+        phoenix_experiment_id: str,
+        per_example: list[dict],
+    ) -> bool: ...
 
 
 # ---------------------------------------------------------------------------
@@ -217,14 +225,39 @@ async def run_experiment(
         candidate_per_eval=candidate_per_eval,
     )
 
+    baseline_payload = _build_phoenix_payload(
+        pairs=baseline_pairs,
+        per_eval=baseline_per_eval,
+    )
+    candidate_payload = _build_phoenix_payload(
+        pairs=candidate_pairs,
+        per_eval=candidate_per_eval,
+    )
+
+    from src.db import get_phoenix_dataset_id_for_trigger
+
+    phoenix_dataset_id = await get_phoenix_dataset_id_for_trigger(
+        db, trigger.improvement_trigger_id
+    )
     phoenix_baseline_id, phoenix_candidate_id = await _mint_phoenix_experiment_ids(
         phoenix_client=phoenix_client,
         trigger=trigger,
         experiment_id=experiment_id,
-        dataset_name=dataset_name,
+        phoenix_dataset_id=phoenix_dataset_id,
         baseline_label=baseline_label,
         candidate_label=candidate_label,
     )
+
+    if not phoenix_baseline_id.startswith("local-"):
+        await mcp_client.log_experiment_runs(
+            phoenix_experiment_id=phoenix_baseline_id,
+            per_example=baseline_payload,
+        )
+    if not phoenix_candidate_id.startswith("local-"):
+        await mcp_client.log_experiment_runs(
+            phoenix_experiment_id=phoenix_candidate_id,
+            per_example=candidate_payload,
+        )
 
     record = ExperimentRecord(
         experiment_id=experiment_id,
@@ -274,7 +307,7 @@ async def _mint_phoenix_experiment_ids(
     phoenix_client: Client | None,
     trigger: ImprovementTrigger,
     experiment_id: str,
-    dataset_name: str,
+    phoenix_dataset_id: str | None,
     baseline_label: str,
     candidate_label: str,
 ) -> tuple[str, str]:
@@ -289,11 +322,17 @@ async def _mint_phoenix_experiment_ids(
     in the Phoenix Cloud UI's Experiments tab with the dataset linkage and a
     metadata blob pointing back to the local experiment_id / trigger.
 
+    The caller passes the Phoenix dataset_id captured at dataset-creation
+    time (persisted on ``regression_examples.phoenix_dataset_id``). Looking
+    the dataset up by name is unsafe: Phoenix slugifies names containing
+    characters like ``::`` so ``regression-{failure_key}`` round-trips to a
+    hex slug we cannot derive client-side.
+
     Falls back to ``local-*`` stub IDs when:
       - the Phoenix client is missing (offline or PHOENIX_API_KEY unset),
-      - the regression dataset hasn't been promoted to Phoenix yet,
-      - the SDK doesn't expose ``datasets.get_dataset`` / ``experiments.create``
-        on the pinned version,
+      - the regression dataset hasn't been promoted to Phoenix yet
+        (``phoenix_dataset_id is None``),
+      - the SDK doesn't expose ``experiments.create`` on the pinned version,
       - any network or HTTP error surfaces.
     """
     fallback = (
@@ -301,24 +340,10 @@ async def _mint_phoenix_experiment_ids(
         f"local-candidate-{experiment_id[:8]}",
     )
 
-    if phoenix_client is None:
+    if phoenix_client is None or not phoenix_dataset_id:
         return fallback
 
     def _create() -> tuple[str, str] | None:
-        try:
-            dataset = phoenix_client.datasets.get_dataset(dataset=dataset_name)
-        except Exception as exc:
-            logger.info(
-                "Phoenix dataset '%s' not found (%s) — using local-stub experiment IDs",
-                dataset_name,
-                exc,
-            )
-            return None
-
-        dataset_id = getattr(dataset, "id", None)
-        if not dataset_id:
-            return None
-
         base_metadata = {
             "phoenixloop_experiment_id": experiment_id,
             "improvement_trigger_id": trigger.improvement_trigger_id,
@@ -327,7 +352,7 @@ async def _mint_phoenix_experiment_ids(
 
         try:
             baseline_exp = phoenix_client.experiments.create(
-                dataset_id=str(dataset_id),
+                dataset_id=phoenix_dataset_id,
                 experiment_name=f"phoenixloop-baseline-{experiment_id[:8]}",
                 experiment_description=(
                     f"Baseline run for trigger {trigger.improvement_trigger_id}"
@@ -339,7 +364,7 @@ async def _mint_phoenix_experiment_ids(
                 },
             )
             candidate_exp = phoenix_client.experiments.create(
-                dataset_id=str(dataset_id),
+                dataset_id=phoenix_dataset_id,
                 experiment_name=f"phoenixloop-candidate-{experiment_id[:8]}",
                 experiment_description=(
                     f"Candidate run for trigger {trigger.improvement_trigger_id}"
@@ -375,10 +400,10 @@ async def _mint_phoenix_experiment_ids(
     if result is None:
         return fallback
     logger.info(
-        "Created Phoenix experiments: baseline=%s candidate=%s (dataset=%s)",
+        "Created Phoenix experiments: baseline=%s candidate=%s (dataset_id=%s)",
         result[0],
         result[1],
-        dataset_name,
+        phoenix_dataset_id,
     )
     return result
 
@@ -430,15 +455,23 @@ async def _resolve_candidate_prompt(
     from src.db import get_prompt_version
 
     proposal = trigger.patch_proposal_json or {}
-    candidate_label = str(
-        proposal.get("candidate_prompt_version") or "candidate"
-    )
+    # ``candidate_prompt_version`` from the proposal carries the *Phoenix*
+    # prompt-version id (base64-encoded) when generate_proposal succeeded
+    # in upserting to Phoenix. We want to preserve that for the release-gate
+    # approve path so it can tag the right Phoenix version as ``production``.
+    # The local ``version_tag`` (human-readable slug) is only useful for UI
+    # display and is the wrong identifier for the Phoenix tags API.
+    phoenix_candidate_version = str(
+        proposal.get("candidate_prompt_version") or ""
+    ).strip()
+    candidate_label = phoenix_candidate_version or "candidate"
     candidate_version_id = proposal.get("local_prompt_version_id")
 
     if candidate_version_id:
         version = await get_prompt_version(db, str(candidate_version_id))
         if version:
-            return version.prompt_text, version.version_tag, version.prompt_version_id
+            label = phoenix_candidate_version or version.version_tag
+            return version.prompt_text, label, version.prompt_version_id
 
     # If the proposal embedded the full text (older shape), use that.
     candidate_text = (
@@ -466,12 +499,28 @@ async def _load_dataset_examples(
     """Return up to MAX_EXAMPLES SupportTickets to run the experiment against.
 
     Resolution order:
-      1. Phoenix dataset ``regression-{failure_key}`` (preferred — populated
-         by the failure_aggregator when a cluster crosses threshold).
-      2. The tickets referenced by the trigger's ``example_run_ids_json``
+      1. Local ``regression_examples`` rows for this trigger (preferred — these
+         are the synthesized tickets generated by ``generate_regression_examples``
+         specifically targeting the failure mode under repair).
+      2. Phoenix dataset ``regression-{failure_key}`` (legacy path; Phoenix
+         server slugifies names containing ``::`` so this only works for
+         simple failure_keys, but kept for completeness).
+      3. The tickets referenced by the trigger's ``example_run_ids_json``
          (the actual failing examples).
-      3. The 5 most-recent tickets in the local DB (generic sample).
+      4. The 5 most-recent tickets in the local DB (generic sample).
     """
+    from src.db import get_regression_examples_for_trigger
+
+    regression_examples = await get_regression_examples_for_trigger(
+        db, trigger.improvement_trigger_id
+    )
+    tickets = [
+        _ticket_from_regression_example(ex)
+        for ex in regression_examples[:MAX_EXAMPLES]
+    ]
+    if tickets:
+        return tickets
+
     dataset_name = _dataset_id_for_trigger(trigger)
     try:
         phoenix_examples = await mcp_client.get_dataset(dataset_name)
@@ -482,7 +531,6 @@ async def _load_dataset_examples(
         )
         phoenix_examples = []
 
-    tickets: list[SupportTicket] = []
     for ex in (phoenix_examples or [])[:MAX_EXAMPLES]:
         ticket = _ticket_from_dataset_example(ex)
         if ticket is not None:
@@ -498,6 +546,36 @@ async def _load_dataset_examples(
             return tickets_from_runs
 
     return await _recent_tickets(db, MAX_EXAMPLES)
+
+
+def _ticket_from_regression_example(ex: RegressionExample) -> SupportTicket:
+    """Convert a stored RegressionExample row into a SupportTicket the
+    agent runner can consume."""
+    from src.models import TicketCategory
+
+    payload = ex.input_ticket_json or {}
+    body = str(payload.get("body", ""))
+    category_raw = str(payload.get("category", "ambiguous")).lower()
+    try:
+        category = TicketCategory(category_raw)
+    except ValueError:
+        category = TicketCategory.AMBIGUOUS
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    return SupportTicket(
+        ticket_id=f"exp-{ex.regression_example_id[:8]}",
+        customer_id="cust-exp",
+        category=category,
+        subject="",
+        body=body,
+        metadata_json={
+            "experiment_example_id": ex.regression_example_id,
+            "expected_behavior": ex.expected_behavior,
+            "failure_mode_targeted": ex.failure_mode_targeted,
+        },
+        created_at=now_iso,
+        updated_at=now_iso,
+    )
 
 
 def _ticket_from_dataset_example(example: object) -> SupportTicket | None:
@@ -684,6 +762,50 @@ def _aggregate_metrics(
         safety_canary_pass_rate=round(safety, 4),
         eval_summary=summary,
     )
+
+
+def _build_phoenix_payload(
+    *,
+    pairs: list[tuple[SupportTicket, AgentRun]],
+    per_eval: dict[str, list[EvalOutput]],
+) -> list[dict]:
+    """Shape the per-example results for ``log_experiment_runs``.
+
+    The order of ``per_eval[name]`` mirrors the order of ``pairs`` — both are
+    produced by walking ``pairs`` in the same loop in ``_score_runs``. We
+    index into each evaluator's list by row position to assemble per-example
+    evaluation rows.
+    """
+    rows: list[dict] = []
+    for idx, (ticket, run) in enumerate(pairs):
+        evals: list[dict] = []
+        for name, outputs in per_eval.items():
+            if idx >= len(outputs):
+                continue
+            out = outputs[idx]
+            evals.append({
+                "name": name,
+                "score": out.score,
+                "label": out.outcome,
+                "explanation": out.explanation,
+            })
+        rows.append({
+            "example_id": (
+                ticket.metadata_json.get("experiment_example_id")
+                if ticket.metadata_json
+                else ticket.ticket_id
+            ),
+            "input": {
+                "ticket_id": ticket.ticket_id,
+                "subject": ticket.subject,
+                "body": ticket.body,
+                "category": ticket.category.value,
+            },
+            "output": run.response_json,
+            "evaluations": evals,
+            "latency_ms": run.latency_ms,
+        })
+    return rows
 
 
 def _per_eval_pass_rates(

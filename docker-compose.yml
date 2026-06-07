@@ -11,6 +11,9 @@ services:
     volumes:
       - db-data:/app/db
       - ./data:/data:ro
+      # Application Default Credentials for Vertex AI. Read-only.
+      # Only used when GOOGLE_GENAI_USE_VERTEXAI=true; otherwise ignored.
+      - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]

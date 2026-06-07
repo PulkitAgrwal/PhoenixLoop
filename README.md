@@ -9,9 +9,9 @@
 [![Arize Track](https://img.shields.io/badge/track-Arize-0f4c3a?style=flat-square)](https://rapid-agent.devpost.com/details/arize-resources)
 [![Phoenix-instrumented](https://img.shields.io/badge/Phoenix-instrumented-00d992?style=flat-square)](https://arize.com/docs/phoenix)
 
-🔗 **Live demo:** <LIVE_URL_PLACEHOLDER>
-🎥 **Demo video (3 min):** <YOUTUBE_LINK_PLACEHOLDER>
-📊 **Devpost:** Submitted to the [Google Cloud Rapid Agent Hackathon — Arize track](https://rapid-agent.devpost.com)
+**Live demo:** https://phoenixloop-frontend-856079316421.us-central1.run.app
+**API health:** https://phoenixloop-backend-856079316421.us-central1.run.app/api/health
+**Devpost:** Submitted to the [Google Cloud Rapid Agent Hackathon — Arize track](https://rapid-agent.devpost.com)
 
 ---
 
@@ -20,6 +20,7 @@
 - **The agent fixes itself.** When PhoenixLoop's support agent fails the same way three times, a diagnosis sub-agent reads its own failing spans back from Arize Phoenix via MCP, drafts a one-line prompt patch, A/B-tests it against a frozen regression set, and only ships the candidate if a release gate clears six promotion rules.
 - **Phoenix is load-bearing, not a logging skin.** Every trace, eval annotation, dataset row, prompt version, and experiment is round-tripped through Phoenix. Take Phoenix away and the loop literally cannot close.
 - **One full healing cycle runs in ~90 seconds** on the auto-seed: eight tickets, two intentional failures, one cluster, one diagnosis, one experiment, one verdict. Under thirty Gemini calls. Measurable end-to-end.
+- **Deployed on Cloud Run.** Live demo is one click from the hero. Backend runs Gemini through Vertex AI. See [DEPLOYMENT.md](./DEPLOYMENT.md) for the gcloud commands.
 
 ---
 
@@ -454,14 +455,13 @@ Total wall-clock: ~90 seconds. Total Gemini calls: under thirty.
 │   └── package.json
 ├── examples/                      Three curated ticket → failure → diagnosis scenarios
 ├── cloud-run/                     backend.yaml + frontend.yaml + Secret Manager refs
-├── docs/                          PRD, design notes, audit, deployment runbook
-├── hackathon-audit/               full audit of this submission (12 files)
+├── docs/                          PRD, design notes, deployment runbook
 ├── data/
 │   ├── policies/                  Markdown policy docs the search_policy tool reads
 │   └── tickets/                   Seed tickets for the auto-seed flow
 ├── scripts/                       reset_db.py + utility scripts
 ├── .env.example                   All required environment variables, commented
-├── cloudbuild.yaml                Cloud Build pipeline (deferred for this commit)
+├── cloudbuild.yaml                Cloud Build pipeline
 ├── DEPLOYMENT.md                  Cloud Run + Secret Manager runbook
 ├── CONTRIBUTING.md                Standards + setup
 ├── LICENSE                        MIT
@@ -591,8 +591,6 @@ Secrets (`PHOENIX_API_KEY`, `GOOGLE_API_KEY`) live in Google Secret Manager and 
 **What happens if Phoenix is unreachable mid-demo?** The `mcp_tools.py` build returns `None`, the support agent drops the MCP toolset from its tool list and runs on the four production tools only. The agent keeps answering tickets. The healing loop pauses — no diagnosis, no proposals, no experiments — until Phoenix is reachable. Degraded mode is covered by `tests/agent/test_degraded_mode.py`.
 
 **Why no LLM judges in the experiment hot path?** Cost and noise. At 5 examples per side, judge variance dominates the signal and doubles Gemini call count. The experiment scoreboard's hallucination column is honestly labeled "Not sampled" — better than faking 0.0 on both sides.
-
-**Where can I see the full audit?** [`hackathon-audit/`](./hackathon-audit) — 12 files covering compliance, Arize-track depth, judging scorecard, UI/UX, architecture, repo & submission package, winner-repo comparison, prioritized fix plan, demo video script, Devpost story draft, hosted-demo readiness, and a final executive summary.
 
 ---
 

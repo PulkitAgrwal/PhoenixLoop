@@ -13,10 +13,27 @@ import { CodeBlock } from "@/components/ui/code-block";
 import { CodeInline } from "@/components/ui/code-inline";
 import { HairlineDivider } from "@/components/ui/hairline-divider";
 import { GridOverlay } from "@/components/ui/grid-overlay";
+import { useHealingCycle } from "@/components/healing/healing-cycle-context";
 
 // ────────────────────────────────────────────────────────────────────
 // Hero
 // ────────────────────────────────────────────────────────────────────
+
+function WatchItHealButton() {
+  const { startCycle, openModal, running, cycleId } = useHealingCycle();
+  const hasActiveCycle = running || cycleId !== null;
+
+  return (
+    <Button
+      variant="primary"
+      size="lg"
+      onClick={() => (hasActiveCycle ? openModal() : startCycle())}
+    >
+      {hasActiveCycle ? "Reopen healing cycle" : "Watch it heal (90 s)"}
+      <ArrowRight className="h-4 w-4" />
+    </Button>
+  );
+}
 
 function Hero() {
   return (
@@ -41,12 +58,7 @@ function Hero() {
           </p>
 
           <div className="flex flex-wrap items-center gap-3 pt-2">
-            <Button asChild variant="primary" size="lg">
-              <Link href="/healing/improvements">
-                Watch it heal (90 s)
-                <ArrowRight className="h-4 w-4" />
-              </Link>
-            </Button>
+            <WatchItHealButton />
             <Button asChild variant="outline" size="lg">
               <Link href="/conversation">Open the conversation</Link>
             </Button>

@@ -4,13 +4,13 @@ import json
 import logging
 from typing import Protocol, runtime_checkable
 
-import google.genai as genai
 from google.genai import types
 from pydantic import BaseModel
 
 from src.config import get_settings
 from src.diagnosis.phoenix_mcp import PromptInfo, TraceRecord
 from src.models import ImprovementTrigger
+from src.utils.genai_client import make_genai_client
 from src.utils.retry import retry
 
 logger = logging.getLogger(__name__)
@@ -102,7 +102,7 @@ async def _call_gemini_diagnosis(prompt_text: str) -> DiagnosisResult:
         Parsed DiagnosisResult from Gemini response.
     """
     settings = get_settings()
-    client = genai.Client(api_key=settings.google_api_key)
+    client = make_genai_client()
     response = client.models.generate_content(
         model=settings.gemini_model,
         contents=prompt_text,

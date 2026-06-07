@@ -814,6 +814,27 @@ async def get_regression_examples_for_trigger(
     return [_regression_example_from_row(r) for r in rows]
 
 
+async def get_phoenix_dataset_id_for_trigger(
+    db: aiosqlite.Connection, trigger_id: str
+) -> str | None:
+    """Return the Phoenix dataset_id captured for this trigger's regression
+    examples, or None if no example has one persisted.
+
+    Used by the experiment orchestrator to look up Phoenix datasets by ID
+    instead of by name — Phoenix server slugifies dataset names containing
+    characters like ``::``, so the name we passed at creation time is not
+    the name Phoenix stores under.
+    """
+    cursor = await db.execute(
+        "SELECT phoenix_dataset_id FROM regression_examples "
+        "WHERE improvement_trigger_id = ? AND phoenix_dataset_id IS NOT NULL "
+        "LIMIT 1",
+        (trigger_id,),
+    )
+    row = await cursor.fetchone()
+    return row["phoenix_dataset_id"] if row else None
+
+
 # ---------------------------------------------------------------------------
 # CRUD — Experiments
 # ---------------------------------------------------------------------------
@@ -974,6 +995,49 @@ async def list_experiments(
     rows = await data_cursor.fetchall()
     items = [_experiment_from_row(r) for r in rows]
     return items, total_count
+
+
+async def list_experiments_for_trigger(
+    db: aiosqlite.Connection, improvement_trigger_id: str
+) -> list[ExperimentRecord]:
+    """All experiments for one improvement trigger, oldest first."""
+    cursor = await db.execute(
+        "SELECT * FROM experiments WHERE improvement_trigger_id = ? "
+        "ORDER BY created_at ASC",
+        (improvement_trigger_id,),
+    )
+    rows = await cursor.fetchall()
+    return [_experiment_from_row(r) for r in rows]
+
+
+async def get_failure_aggregates_by_key(
+    db: aiosqlite.Connection, failure_key: str
+) -> list[FailureAggregate]:
+    """All failure aggregates for one failure_key, newest first.
+
+    The failure_aggregates table uses failure_key as PRIMARY KEY, so this
+    returns at most one row — but the return type is list for API consistency.
+    """
+    cursor = await db.execute(
+        "SELECT * FROM failure_aggregates WHERE failure_key = ? "
+        "ORDER BY last_seen_at DESC",
+        (failure_key,),
+    )
+    rows = await cursor.fetchall()
+    return [_failure_aggregate_from_row(r) for r in rows]
+
+
+async def list_improvement_triggers_for_key(
+    db: aiosqlite.Connection, failure_key: str
+) -> list[ImprovementTrigger]:
+    """All improvement triggers for one failure_key, newest first."""
+    cursor = await db.execute(
+        "SELECT * FROM improvement_triggers WHERE failure_key = ? "
+        "ORDER BY created_at DESC",
+        (failure_key,),
+    )
+    rows = await cursor.fetchall()
+    return [_improvement_trigger_from_row(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------

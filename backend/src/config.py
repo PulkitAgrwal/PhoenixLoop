@@ -3,6 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _PROJECT_ROOT_ENV = Path(__file__).resolve().parent.parent.parent / ".env"
@@ -51,6 +52,27 @@ class Settings(BaseSettings):
     # When true, the lifespan skips the background full_loop_seed task so the
     # DB stays empty after a fresh `docker compose up -v` reset.
     skip_autoseed: bool = False
+
+    demo_force_pending_review: bool = Field(
+        default=False,
+        description=(
+            "When true, the live healing seed coerces the release-gate verdict "
+            "to PENDING_HUMAN_REVIEW so demo viewers always see the human-approval "
+            "step. Has no effect on production agent runs."
+        ),
+    )
+
+    demo_force_failure: bool = Field(
+        default=False,
+        description=(
+            "When true, the live SSE healing loop strips the citations field "
+            "from the 2nd and 4th tickets' agent responses BEFORE evals run, "
+            "so the citation_presence evaluator deterministically fails twice. "
+            "This is what produces the cluster threshold + healing trigger for "
+            "the 'Watch it heal' demo. The agent's actual Gemini calls and "
+            "Phoenix traces are untouched."
+        ),
+    )
 
 
 @lru_cache

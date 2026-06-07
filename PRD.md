@@ -273,6 +273,18 @@ frontend/src/
     ├── traces/                     trace-waterfall, span-detail, eval-badge
     ├── conversation/               chat-interface, live-trace-pane, tool-call-card,
     │                                 message-bubble, scenario-selector
+    ├── healing/                    healing-cycle-context (provider + useHealingCycle
+    │                                 hook + 11-stage map; lives at the layout level
+    │                                 so the SSE stream survives route changes),
+    │                                 healing-cycle-modal (Dialog · stages list ·
+    │                                 live-log auto-scroll · verdict footer with
+    │                                 Approve/Reject and Promoted/Rejected states),
+    │                                 healing-cycle-chip (persistent bottom-right
+    │                                 pill with pulsing brand-green dot; shows
+    │                                 "stage N/11" while running, switches to
+    │                                 verdict copy on completion),
+    │                                 dismiss-warning-dialog (AlertDialog shown
+    │                                 when closing the modal mid-cycle)
     ├── improvements/               diagnosis-trace, prompt-diff (using `diff` pkg),
     │                                 evidence-card, regression-list
     ├── experiments/                score-comparison (scoreboard table),
@@ -356,6 +368,42 @@ Verdicts: `promoted` · `rejected` · `pending_human_review` · `blocked_critica
 - **Lightweight mode** (`LIGHTWEIGHT_DEMO=true`): reads JSON from `backend/tests/fixtures/seed/`. Zero Gemini calls, completes in <1s
 
 `scripts/reset_db.py` wipes the host's `phoenixloop.db` + WAL/SHM sidecars and recreates the schema. `docker compose down -v` wipes the Docker volume.
+
+### 4.8 Path H — "Watch it heal" SSE modal
+
+The hero CTA on `/` opens a centrally-mounted modal that streams the full
+healing cycle as Server-Sent Events:
+
+1. Click "Watch it heal (90 s)" → `useHealingCycle().startCycle()` opens the
+   modal, mints an `AbortController`, and starts fetching
+   `POST /api/demo/full-loop/stream`.
+2. Backend (`backend/src/api/_full_loop_events.py:stream_full_loop`) yields
+   `cycle_started` first with a server-minted `cycle_id`, then advances
+   through `seed_started → ticket_created → agent_run_completed →
+   evals_completed → trigger_fired → diagnosis_* → patch_generated →
+   regressions_generated → experiment_started → experiment_completed →
+   release_gate_decided → done`.
+3. When `DEMO_FORCE_FAILURE=true` (the demo default), `stream_full_loop`
+   strips the `citations` field from the 2nd and 4th tickets' agent
+   responses **after** `run_agent` returns and **before** `run_all_evals`
+   runs — so the `citation_presence` evaluator deterministically fails
+   twice, crosses the threshold, and trips the healing trigger. The
+   agent's actual Gemini call + Phoenix span are untouched; only the
+   post-agent response shape is mutated.
+4. The modal renders a left-column stage list (11 stages, current stage
+   pulses) and a right-column live log with auto-scroll. Closing mid-cycle
+   shows a "Cycle still running" warning; confirming sends the cycle to a
+   persistent bottom-right chip ("Healing cycle · stage N/11 · open") that
+   survives route changes because the provider is mounted at
+   `app/layout.tsx`.
+5. On `release_gate_decided` with `decision=pending_human_review`, the
+   verdict footer shows Reject + "Approve & promote →" buttons. Approve
+   calls `POST /api/release-gate/{decision_id}/actions/approve`, which
+   flips the local active prompt and tags the Phoenix candidate version
+   as `production` (and the previous production version as `previous`).
+6. Approve success swaps the footer to a "✓ Promoted — baseline → candidate"
+   line with a single "View full cycle in Phoenix →" CTA that deep-links
+   to `${NEXT_PUBLIC_PHOENIX_URL}/prompts`.
 
 ---
 
@@ -571,7 +619,7 @@ Anti-slop rules (enforced, non-negotiable): no gradients, no glassmorphism, no d
 
 | Route | Strength |
 |---|---|
-| `/` | Landing: hero with real `phoenix.otel.register` IDE-card + faux terminal streaming `phoenix-mcp:*` lines; live `/api/stats` strip; 7-node loop with code tags; three-column evidence row; hand-built SVG architecture diagram; three code-walks; dense 6-row comparison table; anti-claim block; CTA band; footer |
+| `/` | Landing: hero with real `phoenix.otel.register` IDE-card + faux terminal streaming `phoenix-mcp:*` lines; live `/api/stats` strip; 7-node loop with code tags; three-column evidence row; hand-built SVG architecture diagram; three code-walks; dense 6-row comparison table; anti-claim block; CTA band; footer. The hero "Watch it heal" button opens the SSE-streamed `HealingCycleModal` mounted at the layout level — see §4.8 |
 | `/conversation` | Two-column lg+ (chat + live trace pane), stacked mobile. `phoenix-mcp:*` spans get a 2px brand-green left border in the trace pane. MCP count surfaced separately |
 | `/activity/runs` | Agent-run table with expanding `TraceWaterfall` |
 | `/activity/failures` | Dense list + per-row recharts sparkline + mono `failure_key` + 2px brand-green left border on selection + "Diagnose via Phoenix" CTA |
@@ -598,8 +646,12 @@ Anti-slop rules (enforced, non-negotiable): no gradients, no glassmorphism, no d
 ### 12.1 `.env`
 
 ```bash
-# Google Gemini
+# Google Gemini — Vertex AI is the active path on Cloud Run; the API key
+# stays as an AI Studio fallback when GOOGLE_GENAI_USE_VERTEXAI is unset.
 GOOGLE_API_KEY=
+GOOGLE_GENAI_USE_VERTEXAI=true
+GOOGLE_CLOUD_PROJECT=phoenixloop
+GOOGLE_CLOUD_LOCATION=us-central1
 GEMINI_MODEL=gemini-2.5-flash
 
 # Arize Phoenix Cloud
@@ -623,9 +675,20 @@ RELEASE_SCORE_THRESHOLD=0.75
 LATENCY_BUDGET_MS=10000
 
 # Demo / auto-seed
-LIGHTWEIGHT_DEMO=false       # true → fixtures, zero Gemini calls
-ENABLE_LLM_TOOL_EVALS=false  # keep off; code-evals catch the same regressions
+LIGHTWEIGHT_DEMO=false           # true → fixtures, zero Gemini calls
+ENABLE_LLM_TOOL_EVALS=false      # keep off; code-evals catch the same regressions
+SKIP_AUTOSEED=false              # true on Cloud Run to avoid 30 Gemini calls per cold start
+DEMO_FORCE_PENDING_REVIEW=true   # coerce release-gate to PENDING_HUMAN_REVIEW so the demo always reaches the approve step
+DEMO_FORCE_FAILURE=true          # strip citations from the 2nd + 4th tickets' agent responses to force the cluster threshold
 ```
+
+`google-genai`'s `Client` is constructed centrally in
+`backend/src/utils/genai_client.py:make_genai_client`. With
+`GOOGLE_GENAI_USE_VERTEXAI=true`, it returns `Client(vertexai=True)` and
+the SDK reads credentials from Application Default Credentials —
+the mounted `~/.config/gcloud` volume in Docker Compose, or the runtime
+service account's identity on Cloud Run. With the flag unset, it falls
+back to `Client(api_key=GOOGLE_API_KEY)` against AI Studio.
 
 ### 12.2 `.gemini/settings.json`
 
@@ -750,12 +813,14 @@ Total elapsed if the seed has run: under 2 minutes of clicking through.
 | Release gate with 6 promotion rules | ✅ |
 | Auto-seed on first boot (live + lightweight) | ✅ |
 | Frontend rebuilt per DESIGN.md | ✅ |
-| 243 pytest cases passing | ✅ |
+| "Watch it heal" SSE modal + persistent chip + in-modal approve | ✅ |
+| Vertex AI on the hot path (ADC, no API key) | ✅ |
+| 253 pytest cases passing | ✅ |
 | Open-source license | ✅ MIT |
 | Public repo | Pending push |
-| Hosted URL | Deferred — local-only contract for this session |
-| Demo video | Deferred — local-only contract for this session |
-| 5 hero screenshots | Deferred |
+| Hosted URL | ✅ Cloud Run (`us-central1`) — see [README](./README.md) for live links |
+| Demo video | Pending |
+| 5 hero screenshots | Pending |
 
 ---
 
