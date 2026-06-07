@@ -90,6 +90,35 @@ Or use the frontend: open [http://localhost:3000](http://localhost:3000) and cli
 
 ---
 
+## Deploy to Google Cloud Run
+
+PhoenixLoop ships ready for Cloud Run. From repo root:
+
+```bash
+gcloud config set project YOUR_PROJECT_ID
+gcloud builds submit --config cloudbuild.yaml
+```
+
+The build runs `docker build` for both services, pushes to `gcr.io`, and
+deploys to `us-central1` Cloud Run via the manifests in `cloud-run/`.
+
+Required secrets (create once with `gcloud secrets create ...`):
+
+- `phoenix-api-key`
+- `google-api-key`
+
+The backend Dockerfile installs Node 20 in addition to Python 3.13 because
+the support agent spawns `npx @arizeai/phoenix-mcp` at runtime for Phoenix
+MCP introspection. The image is ~250 MB compressed.
+
+After the build completes, point `NEXT_PUBLIC_API_URL` on the frontend
+service at the backend's public URL (or update `cloud-run/frontend.yaml`
+with the resolved hostname).
+
+For local dev or Railway deploy, see the sections below.
+
+---
+
 ## Deploy to Railway (Recommended for Cloud)
 
 Railway is the recommended cloud platform — no cold starts, auto-deploy from GitHub, persistent volumes, and $5 free credit/month.

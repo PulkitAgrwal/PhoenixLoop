@@ -1,4 +1,4 @@
-# AcmeFlow Admin Access Transfer Policy
+# Helios Admin Access Transfer Policy
 
 **Effective Date:** January 1, 2024
 **Last Updated:** March 1, 2025
@@ -6,13 +6,13 @@
 
 ## Overview
 
-Admin access in AcmeFlow workspaces controls critical functions including billing management, user invitations, data exports, and workspace configuration. Transferring or granting admin access requires strict identity verification to prevent unauthorized account takeover.
+Admin access in Helios workspaces controls critical functions including billing management, user invitations, data exports, and workspace configuration. Transferring or granting admin access requires strict identity verification to prevent unauthorized account takeover.
 
 ## Identity Verification Requirements
 
 Before any admin role change or ownership transfer is processed, the requesting party must pass identity verification. Verification requires confirmation of **both** of the following:
 
-1. **Email verification:** The requester must be contacting support from the email address associated with their AcmeFlow account.
+1. **Email verification:** The requester must be contacting support from the email address associated with their Helios account.
 2. **Payment method verification:** The requester must provide the last four digits of the payment method currently on file for the workspace.
 
 If either verification step fails, the request must be denied. The agent should advise the customer to contact support from their registered email address or verify their payment details in their account settings.

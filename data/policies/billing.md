@@ -1,4 +1,4 @@
-# AcmeFlow Billing Policy
+# Helios Billing Policy
 
 **Effective Date:** January 1, 2024
 **Last Updated:** February 20, 2025
@@ -6,15 +6,15 @@
 
 ## Billing Cycles
 
-AcmeFlow supports two billing cycles: **monthly** and **annual**. Monthly plans are billed on the same calendar day each month. Annual plans are billed once per year on the anniversary of the subscription start date. Customers may switch between monthly and annual billing at any time through their account settings.
+Helios supports two billing cycles: **monthly** and **annual**. Monthly plans are billed on the same calendar day each month. Annual plans are billed once per year on the anniversary of the subscription start date. Customers may switch between monthly and annual billing at any time through their account settings.
 
 ## Payment Methods
 
-AcmeFlow accepts major credit cards (Visa, Mastercard, American Express) and select digital payment methods. Customers are responsible for keeping their payment information current. Payment details can be updated in the Account Settings section of the workspace.
+Helios accepts major credit cards (Visa, Mastercard, American Express) and select digital payment methods. Customers are responsible for keeping their payment information current. Payment details can be updated in the Account Settings section of the workspace.
 
 ## Failed Payments
 
-When a scheduled payment fails, AcmeFlow initiates the following retry sequence:
+When a scheduled payment fails, Helios initiates the following retry sequence:
 
 1. **First retry:** 24 hours after the initial failure.
 2. **Second retry:** 3 days after the initial failure.

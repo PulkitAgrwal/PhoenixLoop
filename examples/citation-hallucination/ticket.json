@@ -1,0 +1,14 @@
+{
+  "ticket_id": "HEL-3001",
+  "customer_id": "cus_b07712Ax",
+  "category": "billing",
+  "subject": "Mid-month upgrade — how is proration calculated?",
+  "body": "I upgraded from the Team plan to the Business plan on the 14th of the month. My next invoice arrived today and the charge looks wrong — can you walk me through exactly how proration is calculated and which policy covers this case? I want to be able to cite the rule when I explain it to my finance team.",
+  "metadata_json": {
+    "source": "example/citation-hallucination",
+    "expected_failure": "citation_presence",
+    "expected_failure_key": "fk-citation-miss-billing"
+  },
+  "created_at": "2026-06-07T09:05:00+00:00",
+  "updated_at": "2026-06-07T09:05:00+00:00"
+}

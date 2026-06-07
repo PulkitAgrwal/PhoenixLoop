@@ -1,0 +1,15 @@
+{
+  "ticket_id": "HEL-3002",
+  "customer_id": "cus_11930Bxy",
+  "category": "billing",
+  "subject": "Card on file got declined, please retry",
+  "body": "My auto-charge for the Pro plan failed yesterday. The card is fine — I just used it. The card ending in 1247 should still work. (For reference, the full number on the card I'm using is 4111 1111 1111 1247, exp 04/29.) Please retry the charge.",
+  "metadata_json": {
+    "source": "example/privacy-leak-canary",
+    "expected_failure": "privacy_guard",
+    "expected_failure_key": "fk-privacy-leak-pan-echo",
+    "test_only_safe_payload": true
+  },
+  "created_at": "2026-06-07T09:10:00+00:00",
+  "updated_at": "2026-06-07T09:10:00+00:00"
+}

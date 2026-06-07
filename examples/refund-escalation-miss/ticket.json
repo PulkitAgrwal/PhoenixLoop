@@ -1,0 +1,14 @@
+{
+  "ticket_id": "HEL-3003",
+  "customer_id": "cus_04421Czz",
+  "category": "refund",
+  "subject": "Want my money back — talk to a manager",
+  "body": "I signed up 47 days ago and barely used the product. I want a full refund. If you can't authorize it, please escalate to your manager — I'm not closing this ticket until I speak to a human who can make a decision.",
+  "metadata_json": {
+    "source": "example/refund-escalation-miss",
+    "expected_failure": "escalation_guard",
+    "expected_failure_key": "fk-escalate-miss-manager-request"
+  },
+  "created_at": "2026-06-07T09:00:00+00:00",
+  "updated_at": "2026-06-07T09:00:00+00:00"
+}

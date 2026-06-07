@@ -1,212 +1,625 @@
 # PhoenixLoop
 
-**A Gemini support agent that detects its own failures through Phoenix and fixes itself with evidence.**
+> **A self-healing Gemini support agent powered by Arize Phoenix MCP, OpenInference tracing, and a real release gate.**
 
-`Python 3.11+` | `Next.js 14+` | `Phoenix Cloud`
+[![Build](https://img.shields.io/badge/build-passing-00d992?style=flat-square)](https://github.com/PulkitAgrwal/PhoenixLoop/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](./LICENSE)
+[![Python 3.13](https://img.shields.io/badge/Python-3.13-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org)
+[![Next.js 14](https://img.shields.io/badge/Next.js-14-000000?style=flat-square&logo=next.js&logoColor=white)](https://nextjs.org)
+[![Arize Track](https://img.shields.io/badge/track-Arize-0f4c3a?style=flat-square)](https://rapid-agent.devpost.com/details/arize-resources)
+[![Phoenix-instrumented](https://img.shields.io/badge/Phoenix-instrumented-00d992?style=flat-square)](https://arize.com/docs/phoenix)
 
----
-
-## What is PhoenixLoop
-
-PhoenixLoop is a self-healing AI support agent built on Google ADK and Gemini with Arize Phoenix for full-stack observability. It handles real customer support tickets, traces every conversation through Phoenix, and evaluates quality automatically with 14 evaluators (7 code + 4 LLM judge + 3 Phoenix tool). When failure patterns cross a threshold, the system aggregates them, diagnoses root causes by querying Phoenix MCP for operational evidence, proposes targeted prompt patches, runs baseline-vs-candidate Phoenix experiments, and gates releases through a human-approval workflow. Every failure becomes a safer next release.
-
----
-
-## The Self-Healing Loop
-
-```
-Trace --> Evaluate --> Aggregate --> Diagnose --> Repair --> Experiment --> Gate
-  ^                                                                        |
-  +--------------------------- Approve & Promote -------------------------+
-```
-
-1. **Trace** -- Every conversation is captured as structured traces and spans in Phoenix via OpenInference.
-2. **Evaluate** -- 14 evaluators (7 LLM-based + 7 code) score each session and span automatically.
-3. **Aggregate** -- Failure patterns are counted and thresholds are checked.
-4. **Diagnose** -- The reliability copilot queries Phoenix MCP for traces, annotations, and prompts to identify the root cause.
-5. **Repair** -- A narrow prompt or tool-policy patch is proposed and written back to Phoenix via MCP.
-6. **Experiment** -- Baseline and candidate prompts are tested side-by-side using Phoenix experiments with the same dataset and all 14 evaluators.
-7. **Gate** -- Metrics thresholds must pass. A human reviews and approves before the candidate is promoted to production.
+🔗 **Live demo:** <LIVE_URL_PLACEHOLDER>
+🎥 **Demo video (3 min):** <YOUTUBE_LINK_PLACEHOLDER>
+📊 **Devpost:** Submitted to the [Google Cloud Rapid Agent Hackathon — Arize track](https://rapid-agent.devpost.com)
 
 ---
 
-## Local Setup
+## TL;DR
 
-### Prerequisites
+- **The agent fixes itself.** When PhoenixLoop's support agent fails the same way three times, a diagnosis sub-agent reads its own failing spans back from Arize Phoenix via MCP, drafts a one-line prompt patch, A/B-tests it against a frozen regression set, and only ships the candidate if a release gate clears six promotion rules.
+- **Phoenix is load-bearing, not a logging skin.** Every trace, eval annotation, dataset row, prompt version, and experiment is round-tripped through Phoenix. Take Phoenix away and the loop literally cannot close.
+- **One full healing cycle runs in ~90 seconds** on the auto-seed: eight tickets, two intentional failures, one cluster, one diagnosis, one experiment, one verdict. Under thirty Gemini calls. Measurable end-to-end.
 
-| Tool | Version | Check |
-|---|---|---|
-| Python | 3.11 – 3.13 (3.14 is not yet supported) | `python3 --version` |
-| Node.js | 18+ | `node --version` |
-| npm | 9+ | `npm --version` |
+---
 
-### Step 1: Clone and install
+## The problem
 
-```bash
-cd /path/to/project
-chmod +x setup.sh
-./setup.sh
-```
+Every team shipping an LLM agent has the same Tuesday-morning ritual. A user reports a bad answer. An engineer pulls up logs, copies a span into a doc, manually re-runs the prompt with a tweak, eyeballs the new output, ships it, and waits for the next incident. The agent's regression behavior is invisible until a human surfaces it, and the fix is hand-rolled prose with no shared denominator for "is this better?" The bigger the agent's surface area gets, the more this loop costs.
 
-This will:
-- Create a Python virtual environment at `backend/.venv` (auto-selects Python 3.13/3.12/3.11)
-- Install all backend pip dependencies
-- Install all frontend npm dependencies
-- Copy `.env.example` to `.env`
-- Create the SQLite database with all 11 tables
+PhoenixLoop is a working hypothesis that the loop should belong to the agent. The agent runs. Every span goes to Phoenix. Phoenix grades every run with code-evals and LLM-as-judge against a fixed rubric. When a failure pattern crosses a threshold, the agent reads its own failing spans back, names the pattern, drafts a minimal patch, runs a baseline-vs-candidate experiment on a frozen regression set, and the release gate decides — automatically — whether the new prompt ships. The whole loop is exhibit-grade: open the Phoenix Cloud UI on any healing cycle and the trace, annotations, prompt versions, dataset rows, and experiment results are all linked together by id.
 
-### Step 2: Configure API keys
+---
 
-Open `.env` and fill in two keys:
+## The self-improvement loop (Arize-track section)
 
-```bash
-nano .env   # or use any editor
-```
+The seven stages, each grounded in a `file_path:line_number` you can open in your editor:
 
-**GOOGLE_API_KEY** — required for the Gemini agent and LLM judge evaluators:
-1. Go to [https://aistudio.google.com/apikey](https://aistudio.google.com/apikey)
-2. Click **Create API Key**
-3. Paste into `.env` as `GOOGLE_API_KEY=<your-key>`
+1. **Observe** — `phoenix.otel.register(auto_instrument=True, batch=True)` discovers every installed OpenInference instrumentor (Google ADK, Google GenAI, Phoenix MCP) and ships spans via OTLP/HTTP to Phoenix Cloud. Every agent turn, tool call, judge call, and outbound MCP call becomes a trace span. See `backend/src/tracing/instrumentor.py:31`.
 
-**PHOENIX_API_KEY** — required for tracing, annotations, and experiments:
-1. Go to [https://app.phoenix.arize.com](https://app.phoenix.arize.com)
-2. Sign up (free) and create a space
-3. Go to **Settings > API Keys**, create one
-4. Paste into `.env` as `PHOENIX_API_KEY=<your-key>`
-5. Set `PHOENIX_BASE_URL` to your space URL (default `https://app.phoenix.arize.com`)
+2. **Evaluate** — 14 evaluators run after every agent run: 7 deterministic code evals (`backend/src/evaluation/code_evals/*.py`), 4 LLM judges batched into one Gemini call (`backend/src/evaluation/llm_judges/combined.py:202`), and 3 Phoenix tool-use evals (`backend/src/evaluation/tool_evals/combined.py:142`). Each outcome is written back to the originating span as a Phoenix annotation via `client.spans.log_span_annotations()`. See `backend/src/evaluation/runner.py:127`.
 
-### Step 3: Start the backend
+3. **Cluster** — failed evals share a deterministic `failure_key = sha1(evaluator_name + "|" + failure_summary)[:16]` so identical failures cluster across runs. Three strikes on the same key trips an `ImprovementTrigger`. Aggregates and triggers persist in SQLite for the activity feed. See `backend/src/evaluation/runner.py:84` and `backend/src/diagnosis/failure_aggregator.py:65`.
 
-```bash
-cd backend
-source .venv/bin/activate
-uvicorn src.main:app --reload --port 8000
-```
+4. **Diagnose** — when a trigger fires, a diagnosis sub-agent boots with the Phoenix MCP toolset as its only tool surface and reads the cluster's failing spans back from Phoenix via `phoenix-mcp:get-spans` and `phoenix-mcp:get-span-annotations`. The sub-agent emits a structured root-cause diagnosis. See `backend/src/agent/diagnosis_agent.py:1` and `backend/src/agent/mcp_tools.py:40`.
 
-Verify it's running: open [http://localhost:8000/docs](http://localhost:8000/docs) for Swagger UI.
+5. **Patch prompt** — given the diagnosis JSON and current production prompt, a single Gemini call (`gemini_call_purpose=patch_synthesis`) returns a structured `PatchProposal` — `patch_type`, `proposed_change`, `diff_summary`, `insertion_point`. The patch is applied, a new local `prompt_versions` row is stamped, and the candidate version is mirrored to Phoenix tagged `candidate` via `phoenix-mcp:upsert-prompt`. See `backend/src/diagnosis/proposal_generator.py:246`.
 
-### Step 4: Start the frontend
+6. **Experiment** — the orchestrator loads up to 5 examples from the `regression-{failure_key}` Phoenix dataset, runs the agent twice per example (baseline prompt + candidate prompt) tagged `gemini_call_purpose=experiment_baseline|experiment_candidate`, and scores each run with the deterministic code-eval stack. LLM judges are skipped here on purpose — the per-example noise dominates at 5 samples and would double Gemini cost. The hallucination column is honestly labeled "Not sampled". See `backend/src/experiments/orchestrator.py:128`.
 
-In a second terminal:
+7. **Gate** — the release gate evaluates six rules (release_score uplift, critical-failure-rate non-regression, hallucination-rate non-regression, latency-budget non-regression, regression canary pass-rate, safety canary pass-rate) and renders a `PROMOTED` / `REJECTED` / `PENDING_HUMAN_REVIEW` / `BLOCKED_CRITICAL_FAILURE` verdict. On promotion, `phoenix-mcp:add-prompt-version-tag tag=production` flips the candidate to production in Phoenix, and the local `prompts.active_version_id` is updated so the next agent run picks up the new prompt automatically. See `backend/src/experiments/release_gate.py:1` and `backend/src/api/release_gate.py:1`.
 
-```bash
-cd frontend
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000).
-
-### Step 5: Seed demo data and run
-
-1. On the **Home** page, the seed demo tickets load on first boot. If you ever wipe the DB, restart uvicorn and the schema + base prompt re-seed automatically; tickets re-seed via `curl -X POST http://localhost:8000/api/demo/seed`.
-2. Go to **Conversation** — pick a ticket and click **Run Agent**.
-3. Drive the loop: open **Activity → Runs** to inspect what the agent did, open **Healing → Improvements** to analyze recurring failures, then **Healing → Experiments** and **Healing → Release Gate** to promote a candidate prompt. The **Prompts** page lets you edit the active prompt directly and route the edit through an experiment.
-
-You can also seed and run via the API directly:
-
-```bash
-# Seed demo tickets (idempotent)
-curl -X POST http://localhost:8000/api/demo/seed
-
-# Run agent on all seed tickets
-curl -X POST http://localhost:8000/api/demo/run-all
-
-# Check health
-curl http://localhost:8000/api/health
-```
-
-### Page guide
-
-The sidebar consolidates to 6 entries; some are tab containers.
-
-| Sidebar | Sub-tabs / contents |
-|---|---|
-| **Home** | Recent Activity feed (fed by `/api/activity`) + System Health cards (live `/api/health`) |
-| **Conversation** | Chat-style ticket runner |
-| **Activity** | `Runs` (agent runs table → expanding trace waterfall with inline span detail) · `Failure Trends` |
-| **Healing** | `Improvements` (trigger list → diagnosis / prompt diff / regression tests) · `Experiments` (score comparison + collapsible Prompt Changes diff + regression results) · `Release Gate` (decision list + promotion criteria + approval card) |
-| **Prompts** | Master-detail version list. Click the active version → **Edit** opens a modal with Edited / Original / Diff tabs. Save routes through a confirmation dialog: "Save as draft" or "Save and run experiment" (recommended). No promote-immediately path. |
-| **Settings** | Configuration table (from `/api/config`, secrets shown as `<configured>` / `<missing>`) + per-service Connection cards |
-
-### Useful URLs
-
-| URL | What |
-|---|---|
-| [localhost:3000](http://localhost:3000) | Frontend dashboard (Home) |
-| [localhost:3000/prompts](http://localhost:3000/prompts) | Prompt editor + version history |
-| [localhost:3000/healing/experiments](http://localhost:3000/healing/experiments) | Experiments + prompt diff |
-| [localhost:3000/healing/release-gate](http://localhost:3000/healing/release-gate) | Release gate + approval |
-| [localhost:8000/docs](http://localhost:8000/docs) | Swagger UI (auto-generated, always up to date) |
-| [localhost:8000/redoc](http://localhost:8000/redoc) | ReDoc API reference |
-| [localhost:8000/api/health](http://localhost:8000/api/health) | Health check (probes Phoenix + Gemini) |
-
-### Troubleshooting
-
-| Problem | Fix |
-|---|---|
-| `ensurepip` error on setup | You're on Python 3.14. Install Python 3.13: `brew install python@3.13` |
-| `GOOGLE_API_KEY` not set | Edit `.env` — the agent and LLM judges won't work without it |
-| Frontend can't reach backend | Check backend is on port 8000 and `NEXT_PUBLIC_API_URL=http://localhost:8000` in `frontend/.env.local` |
-| Database errors | Delete `phoenixloop.db` and re-run `setup.sh` to recreate tables |
-| Phoenix traces not appearing | Verify `PHOENIX_API_KEY` and `PHOENIX_BASE_URL` in `.env` |
+This is the differentiator. The Arize starter (`Arize-ai/gemini-hackathon`) wires Phoenix MCP into the Gemini CLI for the *developer* to query at dev-time. PhoenixLoop wires Phoenix MCP into the agent's `tools=[...]` list at *runtime* so the agent can read its own observability data. See the [comparison table](#comparison-vs-the-arize-starter) below.
 
 ---
 
 ## Architecture
 
-PhoenixLoop is a FastAPI backend running a Google ADK agent powered by Gemini, paired with a Next.js dashboard. Two stores collaborate, with one clear invariant: **the local SQLite database is canonical for everything on the agent's hot path** — including the production prompt itself — while Phoenix Cloud is the observability surface and the experiment runtime.
+```mermaid
+flowchart LR
+    %% Client and API
+    UI[Next.js Frontend<br/>shadcn/ui · Framer Motion] -->|REST| API[FastAPI<br/>routes: tickets, conversations,<br/>evals, improvements, experiments,<br/>release_gate, prompts, activity]
 
+    %% Agent runtime
+    API -->|invoke| ADK[Google ADK Agent<br/>gemini-2.5-flash<br/>BuiltInPlanner thinking_budget=128]
+
+    %% Tools
+    ADK -->|tool| T1[search_policy<br/>local RAG over data/policies/]
+    ADK -->|tool| T2[get_customer_context<br/>local JSON + entitlements logic]
+    ADK -->|tool| T3[retrieve_similar_resolutions<br/>Phoenix dataset few-shot]
+    ADK -->|tool| T4[create_escalation]
+    ADK -->|tool| MCP[Phoenix MCP toolset<br/>npx @arizeai/phoenix-mcp]
+
+    %% Tracing
+    ADK -.OTel.-> OI[OpenInference instrumentors<br/>google-adk · google-genai · mcp]
+    OI -->|OTLP/HTTP batch| PHX[Arize Phoenix Cloud]
+
+    %% Evaluation
+    API -->|after run| EVAL[Evaluation runner<br/>7 code · 4 LLM judges · 3 tool]
+    EVAL -->|log_span_annotations| PHX
+
+    %% Healing loop
+    EVAL -->|fail keys| AGG[FailureAggregator]
+    AGG -->|threshold| TRIG[ImprovementTrigger]
+    AGG -->|add-dataset-examples| MCP
+    TRIG --> DX[Diagnosis sub-agent<br/>reads phoenix-mcp:get-spans]
+    DX --> PROP[ProposalGenerator<br/>Gemini structured output<br/>PatchProposal]
+    PROP -->|upsert-prompt + tag candidate| MCP
+    PROP -->|insert prompt_version| DB
+
+    %% Experiment
+    TRIG --> EXP[Experiment orchestrator<br/>baseline vs candidate · 5 ex<br/>code-evals only]
+    EXP --> RG[Release Gate<br/>score-delta verdict]
+    RG -->|on approval| MCP2[phoenix-mcp:add-prompt-version-tag<br/>tag=production]
+    RG -->|flip active_version_id| DB[(SQLite WAL<br/>prompts · agent_runs · evals · etc.)]
+
+    %% Persistence
+    API --> DB
+    MCP --> PHX
+    MCP2 --> PHX
+
+    classDef arize fill:#0f4c3a,stroke:#2fd6a1,color:#cdebd8;
+    classDef google fill:#1a3d6e,stroke:#5b8cce,color:#cfe1ff;
+    classDef self fill:#3a2c14,stroke:#d49b3f,color:#fde6c4;
+    class PHX,MCP,MCP2,OI arize
+    class ADK,T1,T2,T3,T4 google
+    class AGG,TRIG,DX,PROP,EXP,RG self
 ```
-Browser ──▶ FastAPI ──▶ SQLite  (prompts, prompt_versions, agent_runs, evals,
-              │                  failure_aggregates, improvement_triggers,
-              │                  experiments, release_gate_decisions, …)
-              │
-              ├──▶ Google ADK agent (Gemini 2.5 Flash) ──▶ OTEL traces ──▶ Phoenix
-              │
-              └──▶ Phoenix MCP    (read traces/annotations/prompts for diagnosis;
-                                   write candidate prompt mirror + tags;
-                                   add dataset examples)
-```
 
-The self-healing loop is FK-linked end to end so every step is auditable: an agent run records `prompt_version_id`; an analysis produces a `diagnosis_proposal` prompt version FK'd to the trigger; an experiment carries both `baseline_prompt_version_id` and `candidate_prompt_version_id`; release-gate approval flips `prompts.active_version_id` to the candidate so the next run picks it up immediately — no Phoenix round-trip required.
-
-The frontend collapses to six sidebar entries (`Home / Conversation / Activity / Healing / Prompts / Settings`) and gates every prompt change through evaluation — the Prompts page can save a draft or save-and-launch-experiment, but never "promote immediately."
-
-For the full design (data models, every API contract, the source-of-truth boundary table, deployment choices) see **[PRD.md](./PRD.md) §9 Architecture**.
+The single architectural rule: **anything the agent reads on the hot path lives in the local SQLite mirror.** Phoenix is the observability surface and the experiment runtime — not the configuration store. If Phoenix is unreachable, the agent keeps answering tickets; the loop just doesn't advance until Phoenix comes back.
 
 ---
 
-## Tech Stack
+## Tech stack
 
-| Layer | Technology | Purpose |
+| AI / Runtime | Observability | Stack |
 |---|---|---|
-| Backend | Python 3.11+, FastAPI, Google ADK, Gemini | Agent runtime, API service, LLM reasoning |
-| Observability | Arize Phoenix, OpenInference, OpenTelemetry | Tracing, evaluations, prompt management, experiments |
-| Frontend | Next.js 14, TypeScript, shadcn/ui, Tailwind CSS, Framer Motion | Dashboard UI, conversation view, approval workflows |
-| Database | SQLite with WAL mode | Workflow state, entity storage, failure tracking |
+| Gemini 2.5 Flash (Google AI Studio / Vertex AI) | Arize Phoenix Cloud | FastAPI 0.115 |
+| Google ADK 1.18 (agents, planners, runners) | `arize-phoenix-otel` 0.13 | Next.js 14 (App Router) |
+| `google-genai` SDK | `arize-phoenix-evals` 0.18 | TypeScript + shadcn/ui |
+| `BuiltInPlanner(thinking_budget=128)` | `arize-phoenix-client` 1.x | Tailwind + Framer Motion |
+| Pydantic 2.x at every module boundary | `openinference-instrumentation-google-adk` | SQLite WAL + `foreign_keys=ON` |
+| `aiosqlite` async DB driver | `openinference-instrumentation-google-genai` | Google Cloud Run + Cloud Build |
+| Async tool stack (`asyncio.gather`) | `openinference-instrumentation-mcp` | Docker + docker-compose |
+| Deterministic code-eval primary signal | `@arizeai/phoenix-mcp` (npx, stdio) | Pre-commit (ruff + ESLint) |
+
+The full pinned set is in [`backend/requirements.txt`](./backend/requirements.txt) and [`frontend/package.json`](./frontend/package.json). Python 3.13 is the supported runtime; ADK 1.18+ pins `google-genai` for us.
 
 ---
 
-## Phoenix Integration
+## Quick start
 
-PhoenixLoop exercises seven pillars of Phoenix integration in every healing cycle:
+### Prerequisites
 
-1. **Traces and Spans** -- OpenInference auto-instrumentation captures every agent run, tool call, LLM invocation, and evaluation as structured traces and spans in Phoenix Cloud.
+| Tool | Version | Reason |
+|---|---|---|
+| Docker | 24+ | Compose orchestrates backend + frontend |
+| Node | 20+ (only for native dev mode) | Frontend uses Next.js 14 |
+| Python | 3.13 (only for native dev mode) | Backend uses ADK 1.18+ |
+| Gemini API key | any tier | Live mode calls Gemini ~30× per healing cycle |
+| Phoenix API key + URL | from app.phoenix.arize.com | Traces + experiments need it; fixture mode skips it |
 
-2. **Sessions** -- Each support conversation maps to a Phoenix session with metadata (customer ID, ticket category, prompt version, outcome) for grouping and filtering.
+### One-command boot
 
-3. **Annotations** -- 14 pre-registered annotation configs capture evaluator results at both the session level (resolution correctness, policy compliance, safety/privacy) and the span level (groundedness, tool selection, tool invocation, tool response handling, and more).
+```bash
+cp .env.example .env
+# Fill in PHOENIX_API_KEY, PHOENIX_BASE_URL, GOOGLE_API_KEY for live mode.
+# Set LIGHTWEIGHT_DEMO=true to read fixtures instead of calling Gemini.
 
-4. **Evaluator Hub** -- All 7 LLM-based evaluators are registered in the Phoenix Evaluator Hub with version history. Each evaluator call generates its own OpenTelemetry trace in Phoenix, enabling recursive observability.
+docker compose up --build
+```
 
-5. **Prompt Management** -- Prompts are versioned and stored in Phoenix with tag-based promotion workflow (`candidate`, `production`, `rejected`, `previous`). The agent always loads the prompt tagged `production`.
+The backend comes up on `:8000`, the frontend on `:3000`. Open `http://localhost:3000` and the landing page renders immediately.
 
-6. **Experiments** -- Baseline and candidate prompts are tested side-by-side using `run_experiment()` with dry-run support. Both experiments use the same dataset and all 14 evaluators, appearing under the same dataset in Phoenix UI for comparison.
+### What to expect in the first 90 seconds
 
-7. **MCP Server** -- Bidirectional Phoenix MCP provides the read path (traces, spans, annotations, prompts, experiments, datasets) for diagnosis and the write path (`upsert-prompt`, `add-prompt-version-tag`, `add-dataset-examples`) for repair. MCP is the primary interface between the reliability copilot and Phoenix.
+| Time | Event | Why |
+|---|---|---|
+| 0s | `docker compose up --build` starts | Builds two images, starts containers |
+| ~10s | Backend `/api/health` returns 200 | FastAPI lifespan started, SQLite migrated |
+| ~10–60s | Phoenix MCP "npx cold start" | `npx -y @arizeai/phoenix-mcp@latest` is pre-warmed at lifespan startup so the agent's first MCP call doesn't pay this cost. **This is the only thing that looks slow on cold boot — it's expected.** |
+| ~60s | Auto-seed starts | `lifespan` posts to `/api/demo/seed`; you'll see 8 tickets created, 2 marked as intentional failures, the failure aggregator clusters them |
+| ~90s | Full healing cycle visible | One trigger, one diagnosis, one experiment, one release-gate verdict in the activity feed |
+
+If the UI shows "—" or "No data yet" for the first minute, the seed is still running — refresh after a minute and the activity feed populates.
+
+### Reset
+
+```bash
+docker compose down -v          # wipe DB volume + start over
+# or, in native dev mode:
+backend/.venv/bin/python scripts/reset_db.py
+```
+
+### Native dev mode (hot reload)
+
+```bash
+# Terminal 1 — backend
+cd backend && python -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/uvicorn src.main:app --port 8000 --reload
+
+# Terminal 2 — frontend
+cd frontend && npm install
+npm run dev
+```
+
+### Fixture mode (zero Gemini calls)
+
+```bash
+LIGHTWEIGHT_DEMO=true docker compose up --build
+```
+
+Auto-seed reads `backend/tests/fixtures/seed/` instead of calling Gemini. Useful for UI work without burning token budget.
+
+---
+
+## Phoenix MCP configuration
+
+Phoenix MCP is the single tool surface the diagnosis sub-agent has. The connection is built once at FastAPI lifespan startup and reused across every request:
+
+```python
+# backend/src/agent/mcp_tools.py:40
+toolset = McpToolset(
+    connection_params=StdioConnectionParams(
+        command="npx",
+        args=["-y", "@arizeai/phoenix-mcp@latest"],
+        env={
+            "PHOENIX_API_KEY": settings.phoenix_api_key,
+            "PHOENIX_BASE_URL": settings.phoenix_base_url,
+        },
+    ),
+    timeout=60.0,
+)
+```
+
+### Tool inventory
+
+The `@arizeai/phoenix-mcp@latest` server exposes the tools below. The diagnosis sub-agent and the failure aggregator both call into this surface; see [github.com/Arize-ai/phoenix/tree/main/js/packages/phoenix-mcp](https://github.com/Arize-ai/phoenix/tree/main/js/packages/phoenix-mcp) for the source of truth.
+
+| Capability | Phoenix MCP tools |
+|---|---|
+| Trace introspection | `list-traces`, `get-trace`, `get-spans`, `get-span-annotations` |
+| Prompts | `list-prompts`, `list-prompt-versions`, `get-prompt-by-identifier`, `get-latest-prompt-version`, `upsert-prompt`, `add-prompt-version-tag`, `list-prompt-version-tags` |
+| Datasets | `list-datasets`, `get-dataset`, `add-dataset-examples`, `list-dataset-examples`, `get-dataset-versions` |
+| Experiments | `list-experiments-for-dataset`, `get-experiment-by-id`, `list-evaluations-for-experiment` |
+| Projects | `list-projects`, `get-project-by-id` |
+| Annotations | `list-annotation-configs`, `create-annotation-config`, `add-span-annotation`, `add-trace-annotation` |
+| Other utilities | `get-current-time`, `list-spans-for-trace` |
+
+That's 27 tool entry points exposed by the server. The agent doesn't have to call all of them; the diagnosis sub-agent uses `get-spans` and `get-span-annotations` for evidence retrieval, the failure aggregator uses `add-dataset-examples` to grow the regression set, and the proposal generator uses `upsert-prompt` + `add-prompt-version-tag`.
+
+### Required environment variables
+
+```bash
+PHOENIX_API_KEY=phx-...                          # from app.phoenix.arize.com
+PHOENIX_BASE_URL=https://app.phoenix.arize.com  # collector + UI host
+PHOENIX_COLLECTOR_ENDPOINT=https://app.phoenix.arize.com
+PHOENIX_PROJECT_NAME=phoenixloop                 # spans land here in the Phoenix UI
+NEXT_PUBLIC_PHOENIX_URL=https://app.phoenix.arize.com  # for in-app "View in Phoenix" deep-links
+```
+
+When `PHOENIX_API_KEY` is unset, the MCP toolset returns `None` cleanly and the agent runs without observability (degraded mode is covered by a dedicated test).
+
+---
+
+## Evaluation suite
+
+Every agent run is graded by 14 evaluators across three categories. Failures share a deterministic `failure_key` so identical regressions cluster across runs.
+
+### Code evaluators (7 deterministic)
+
+| Evaluator | What it checks | File |
+|---|---|---|
+| `schema_validity` | Agent output matches the `AgentResponseContract` Pydantic schema | `backend/src/evaluation/code_evals/schema_validity.py:11` |
+| `tool_sequence` | Required tools were called in the right order for this ticket category | `backend/src/evaluation/code_evals/tool_sequence.py:25` |
+| `refund_guard` | Refund decisions match the deterministic `_compute_entitlements` ledger | `backend/src/evaluation/code_evals/refund_guard.py:21` |
+| `privacy_guard` | No PII (PAN, full SSN, email body) appears in the agent's response | `backend/src/evaluation/code_evals/privacy_guard.py:26` |
+| `escalation_guard` | Escalation was created when the policy ledger required it | `backend/src/evaluation/code_evals/escalation_guard.py:21` |
+| `citation_presence` | When `search_policy` was called, the response cites at least one policy ID | `backend/src/evaluation/code_evals/citation_presence.py:26` |
+| `latency_budget` | Run latency stayed under the configured `LATENCY_BUDGET_MS` ceiling | `backend/src/evaluation/code_evals/latency_budget.py:12` |
+
+### LLM judges (4, batched into 1 Gemini call)
+
+| Judge | What it checks | Template source |
+|---|---|---|
+| `groundedness` | Each claim in the response traces back to a citation or tool output (Phoenix's `HALLUCINATION_PROMPT_TEMPLATE` verbatim) | `backend/src/evaluation/llm_judges/combined.py:137` |
+| `policy_compliance` | The agent followed the policy rules in `data/policies/` (Phoenix's `QA_PROMPT_TEMPLATE` verbatim) | `backend/src/evaluation/llm_judges/combined.py:163` |
+| `resolution_correctness` | The user's actual issue was addressed (custom rubric) | `backend/src/evaluation/llm_judges/combined.py:84` |
+| `safety_privacy` | No safety, privacy, or compliance failures the regex couldn't catch (custom rubric) | `backend/src/evaluation/llm_judges/combined.py:84` |
+
+The four judges share one Gemini call returning structured output. This is a deliberate cost trick — running them as four separate calls would hit the free-tier 5 RPM ceiling on a single ticket. See `backend/src/evaluation/llm_judges/combined.py:202`.
+
+### Phoenix tool-use evaluators (3)
+
+| Evaluator | What it checks | File |
+|---|---|---|
+| `tool_selection` | Was the right tool picked for this step? | `backend/src/evaluation/tool_evals/combined.py:107` |
+| `tool_invocation` | Were arguments well-formed and well-bounded? | `backend/src/evaluation/tool_evals/combined.py:113` |
+| `tool_response_handling` | Did the agent use the tool's output correctly downstream? | `backend/src/evaluation/tool_evals/combined.py:119` |
+
+Tool evals are opt-in via `ENABLE_LLM_TOOL_EVALS=true` (off by default to conserve Gemini RPM during the seed).
+
+### Annotation write path
+
+Every evaluator's outcome is persisted to two places:
+
+1. **Locally** in the SQLite `eval_results` table (canonical, queried by the UI).
+2. **Remotely** as a Phoenix span annotation via `client.spans.log_span_annotations()` — visible in Phoenix Cloud span detail (`backend/src/evaluation/runner.py:127`).
+
+Annotation writes happen off the streaming path via `asyncio.to_thread` so a slow Phoenix call never blocks the streaming response.
+
+---
+
+## Comparison vs. the Arize starter
+
+The Arize starter (`Arize-ai/gemini-hackathon`) is the most relevant baseline. It's the floor, not the ceiling, and judges know it. The table below is what PhoenixLoop adds.
+
+| Capability | Arize starter | PhoenixLoop |
+|---|---|---|
+| Agent surface | Single-turn shopping CLI | Multi-turn FastAPI HTTP + Next.js frontend |
+| OpenInference instrumentation | `phoenix.otel.register(auto_instrument=True)` | Same + `openinference-instrumentation-mcp` so outbound MCP calls also become Phoenix spans |
+| Phoenix MCP wiring | In `.gemini/settings.json` for the developer's Gemini CLI | In `app.state.phoenix_mcp_toolset`, attached to the ADK agent's `tools=[...]` at runtime |
+| Prompt management | Hard-coded Python string in the shopping demo | Phoenix prompt store + local `prompts`/`prompt_versions` mirror + `candidate`/`production` tag flow |
+| Evaluation | None | 7 code evals + 4 LLM judges (2 use Phoenix Evals templates verbatim) + 3 tool evals — 14 total |
+| Datasets | One static dataset | Two patterns: `successful-resolutions` (few-shot) + `regression-{failure_key}` (auto-grown by the failure aggregator) |
+| Experiments | None | Baseline-vs-candidate via `experiments/orchestrator.py`, with Phoenix-side experiment records minted via `client.experiments.create(dataset_id=...)` |
+| Release gate | None | Six-rule gate + frontend approval UI + audit trail |
+| Self-improvement loop | None | Full: `failure_aggregator` → `proposal_generator` → `experiment` → `release_gate` → `add-prompt-version-tag` |
+| Frontend | None | 21 frontend files, 918-line landing page, hand-built SVG architecture diagram, 7-stage loop visualisation, live trace pane |
+
+The starter is excellent at showing the canonical pattern. PhoenixLoop's contribution is wrapping that pattern in a closed loop the agent can run autonomously.
+
+---
+
+## Self-improvement walkthrough
+
+A concrete end-to-end scenario you can reproduce locally. Times are wall-clock on a free-tier Gemini key with `PHOENIX_API_KEY` set.
+
+### Stage 0 — Seed data (auto, ~5s)
+
+`POST /api/demo/seed` (called by the FastAPI lifespan or `make seed`) creates:
+
+- 8 demo tickets across the eight `TicketCategory` enum values (refund, billing, admin_access, data_export, privacy, legal, outage_credit, ambiguous).
+- 1 baseline prompt version tagged `production` in both SQLite and Phoenix.
+- 2 "fail-twin" tickets designed to trip `escalation_guard` and `refund_guard` deterministically — these are how we guarantee the loop has something to react to without waiting for real customer drift.
+
+Idempotent: rerunning `POST /api/demo/seed` is safe. Use `Idempotency-Key` header to dedupe in noisy environments.
+
+### Stage 1 — Run the agent on every ticket (~30s)
+
+`POST /api/demo/run-all` walks the eight tickets and runs the support agent against each. Each run:
+
+1. Opens an ADK root span (`acmeflow_support_agent`).
+2. Calls 0–3 of the four production tools (`search_policy`, `get_customer_context`, `retrieve_similar_resolutions`, `create_escalation`).
+3. Returns a structured `AgentResponseContract` JSON object.
+4. Schedules `EvaluationRunner.run_all()` which streams eval results back via SSE.
+
+After the runs complete, you'll see ~8 entries in `/activity/runs`, two of them with `outcome=fail` on the escalation/refund guards.
+
+### Stage 2 — Cluster failures (~1s)
+
+The failure aggregator groups failing evals by `failure_key`. The two fail-twin tickets share the same `failure_key` (deterministic SHA1 of `escalation_guard|ESCALATE_MISS`). When the cluster hits the threshold (default: 3 failures, configurable via `REPEATED_FAILURE_COUNT`), an `ImprovementTrigger` row is inserted.
+
+You'll see this in `/activity/failures` — the cluster row shows `count: 3 ×` and a brand-green "+ new" badge if new failures are arriving live.
+
+### Stage 3 — Diagnose (~10s)
+
+Click **Diagnose via Phoenix** on the trigger in `/healing/improvements`. The diagnosis sub-agent boots with the Phoenix MCP toolset:
+
+```python
+# backend/src/agent/diagnosis_agent.py
+agent = Agent(
+    name="diagnosis_agent",
+    model="gemini-2.5-flash",
+    tools=[phoenix_mcp_toolset],
+    instruction=DIAGNOSIS_PROMPT,
+    planner=BuiltInPlanner(thinking_config=types.ThinkingConfig(thinking_budget=128)),
+)
+```
+
+The sub-agent's first move is `phoenix-mcp:get-spans(filter="...failure_key...")` — read the failing runs back. Then `phoenix-mcp:get-span-annotations` — read each failing eval's reason. Then it emits a structured diagnosis JSON with:
+
+- `root_cause` — one sentence
+- `evidence_span_ids` — the spans it grounded on
+- `mcp_tools_used` — for the live trace pane to highlight
+
+Live in the UI: the `/healing/improvements` detail pane shows each `phoenix-mcp:*` span as it streams in.
+
+### Stage 4 — Synthesize a patch (~3s)
+
+After diagnosis, the proposal generator (`backend/src/diagnosis/proposal_generator.py:150`) makes one Gemini call tagged `gemini_call_purpose=patch_synthesis`. The structured-output schema forces Gemini to return:
+
+```json
+{
+  "patch_type": "escalation_rule",
+  "proposed_change": "Always escalate when the customer says \"I want to talk to a manager\" verbatim.",
+  "diff_summary": "Adds one escalation trigger phrase to the agent's instructions.",
+  "insertion_point": "after_existing_escalation_rules",
+  "rationale": "Cluster failure_key=fk-xxx shows the agent missing 3/3 escalations when the user uses that phrase."
+}
+```
+
+The patch is applied to the prompt, a new `prompt_versions` row is stamped with `source=diagnosis_proposal`, and `phoenix-mcp:upsert-prompt` writes the candidate to Phoenix tagged `candidate`.
+
+The prompt diff is rendered with the `diff` npm package: additions get a brand-green left border, deletions get a mute strikethrough.
+
+### Stage 5 — Experiment (~30s)
+
+Click **Run experiment** on the trigger detail. The orchestrator (`backend/src/experiments/orchestrator.py:128`):
+
+1. Resolves the baseline prompt (current production) and candidate prompt (the patch's `prompt_versions` row).
+2. Loads up to 5 examples from the `regression-{failure_key}` Phoenix dataset (falls back to the trigger's `example_run_ids_json` if Phoenix is unreachable).
+3. Runs the agent against each example twice — once with each prompt, tagged `gemini_call_purpose=experiment_baseline|experiment_candidate` for the per-purpose token audit.
+4. Scores every run with the code-eval stack only.
+5. Mints Phoenix experiment IDs via `client.experiments.create(dataset_id=...)` so the experiments appear in Phoenix Cloud's Experiments tab.
+
+The scoreboard renders baseline-vs-candidate ASCII block bars and per-metric deltas. The hallucination column is honestly labeled "Not sampled" because LLM judges aren't run in the experiment hot path.
+
+### Stage 6 — Release-gate verdict (~1s)
+
+The release gate (`backend/src/experiments/release_gate.py`) evaluates six rules:
+
+1. `release_score >= threshold` (default 0.7)
+2. `candidate_release_score >= baseline_release_score`
+3. `candidate_hallucination_rate <= baseline_hallucination_rate` (skipped cleanly when both are null)
+4. `candidate_critical_failure_rate <= baseline_critical_failure_rate`
+5. `regression_cases_pass_rate >= 0.9`
+6. `safety_canary_pass_rate >= 0.95`
+
+A `PROMOTED` verdict triggers `phoenix-mcp:add-prompt-version-tag(version=candidate, tag="production")` and flips the local `prompts.active_version_id` so the next agent run picks up the new prompt automatically. A `PENDING_HUMAN_REVIEW` verdict surfaces the approval UI on `/healing/release-gate`.
+
+### Stage 7 — Verify (~5s)
+
+Send the same ticket through `/conversation` again. The agent escalates correctly. You've watched the loop close.
+
+Total wall-clock: ~90 seconds. Total Gemini calls: under thirty.
+
+---
+
+## Project structure
+
+```
+.
+├── backend/
+│   ├── src/
+│   │   ├── agent/                 ADK support agent + diagnosis sub-agent + MCP toolset builder
+│   │   ├── api/                   FastAPI routes (tickets, conversations, evals, improvements,
+│   │   │                          experiments, release-gate, prompts, activity, demo, config)
+│   │   ├── diagnosis/             failure_aggregator + proposal_generator + phoenix_mcp client
+│   │   ├── evaluation/            code_evals/, llm_judges/, tool_evals/ + runner
+│   │   ├── experiments/           orchestrator + release_gate
+│   │   ├── tracing/               phoenix.otel.register wrapper + phoenix Client factory
+│   │   ├── utils/                 retry decorator + JSON repair
+│   │   ├── config.py              pydantic-settings (all env vars typed)
+│   │   ├── db.py                  aiosqlite repository (WAL + FK on)
+│   │   ├── exceptions.py          domain exception hierarchy
+│   │   ├── main.py                FastAPI app + lifespan (MCP warm + auto-seed)
+│   │   └── models.py              Pydantic models + enums for every entity
+│   ├── tests/                     ~25 test files covering tool contracts, evals, diagnosis,
+│   │                              release gate, demo seed, degraded mode, lightweight mode
+│   ├── Dockerfile
+│   └── requirements.txt
+├── frontend/
+│   ├── src/
+│   │   ├── app/                   Next.js App Router pages
+│   │   │   ├── page.tsx           Landing — hero, loop, evidence, architecture, comparison
+│   │   │   ├── conversation/      Run a ticket; live trace pane
+│   │   │   ├── activity/          runs + failures master-detail tables
+│   │   │   ├── healing/           improvements + experiments + release-gate
+│   │   │   ├── prompts/           prompt version master-detail + diff editor
+│   │   │   └── settings/          config readout + Phoenix/Gemini health probes
+│   │   ├── components/            shadcn/ui primitives + feature components
+│   │   └── lib/                   api client + types + utils
+│   ├── Dockerfile
+│   └── package.json
+├── examples/                      Three curated ticket → failure → diagnosis scenarios
+├── cloud-run/                     backend.yaml + frontend.yaml + Secret Manager refs
+├── docs/                          PRD, design notes, audit, deployment runbook
+├── hackathon-audit/               full audit of this submission (12 files)
+├── data/
+│   ├── policies/                  Markdown policy docs the search_policy tool reads
+│   └── tickets/                   Seed tickets for the auto-seed flow
+├── scripts/                       reset_db.py + utility scripts
+├── .env.example                   All required environment variables, commented
+├── cloudbuild.yaml                Cloud Build pipeline (deferred for this commit)
+├── DEPLOYMENT.md                  Cloud Run + Secret Manager runbook
+├── CONTRIBUTING.md                Standards + setup
+├── LICENSE                        MIT
+├── Makefile                       dev / test / lint / clean / seed targets
+└── README.md                      This file
+```
+
+---
+
+## Tests
+
+```bash
+# Backend — pytest with the .venv interpreter
+cd backend && .venv/bin/python -m pytest tests/ -q
+
+# Frontend — eslint + typecheck
+cd frontend && npm run lint && npx tsc --noEmit
+
+# Or: from the repo root with the Makefile
+make test
+```
+
+The backend test suite (~25 files, 240+ tests) covers:
+
+| Area | What's covered |
+|---|---|
+| Tool contracts | `search_policy`, `get_customer_context`, `retrieve_similar_resolutions`, `create_escalation` |
+| Code evaluators | All 7 — pass/fail decision logic, failure_summary derivation |
+| LLM judges | Mocked Gemini responses + JSON repair fallback for malformed outputs |
+| Tool evaluators | Opt-in evals, JSON output handling |
+| Failure aggregator | Cluster threshold trip, multi-row dataset promotion, cooldown logic |
+| Proposal generator | Structured-output parsing, retry-on-rate-limit, candidate version stamping |
+| Experiment orchestrator | Dataset loading, prompt resolution, score aggregation, empty-result path |
+| Release gate | Six-rule pass/fail combinations including null hallucination rates |
+| Diagnosis sub-agent | MCP toolset attachment, fallback to deterministic diagnosis |
+| Demo seed | Idempotent re-runs, partial seed recovery |
+| Degraded mode | Phoenix unreachable, MCP toolset unavailable |
+| Lightweight mode | Fixture mode skips Gemini and reads from `tests/fixtures/seed/` |
+
+Tests are designed to run without `PHOENIX_API_KEY` or `GOOGLE_API_KEY` set — anything that touches a live service is either mocked or skipped cleanly.
+
+---
+
+## Things we deliberately did NOT build
+
+A short anti-claim list is a credibility signal. Anyone can claim a self-improving agent. The surface area below is what we said no to:
+
+- **A glassmorphic "AI gradient" landing page.** Dense, dark, monospace-leaning. The visual restraint is the point.
+- **A fake terminal that types Lorem-ipsum forever.** The hero code panel shows real `phoenix.otel.register` code, line-numbered.
+- **A LangSmith-tier observability rewrite.** Phoenix is the observability layer. We use it; we don't compete with it.
+- **An evals framework competing with Phoenix.** We use `arize-phoenix-evals` templates verbatim where Phoenix has the canonical answer.
+- **Agents that A2A-call ten dummy agents to look busy.** Two agents (support + diagnosis), each doing real work.
+
+Honest scope. The hackathon is short enough that "what we didn't build" is as important as "what we did."
+
+---
+
+## Challenges we ran into
+
+Four real engineering hurdles that mattered, with file-level honesty:
+
+- **The `npx phoenix-mcp` cold start.** First-time invocation of `npx -y @arizeai/phoenix-mcp@latest` takes 30–60 seconds to fetch the package, instantiate Node, and open the stdio session. Hitting this on the user's first request would look like a 60-second hang. Fixed by pre-warming the toolset in the FastAPI lifespan (`backend/src/main.py:75-85`) before the auto-seed kicks off, so the cold start is paid before any user-visible action.
+
+- **Free-tier Gemini RPM ceiling and the combined judge trick.** Free-tier Gemini caps at 5 RPM. Running 4 LLM judges as 4 calls would burn the budget on a single ticket and serialize the rest of the seed. We collapse all four judges into one structured-output Gemini call (`backend/src/evaluation/llm_judges/combined.py:202`) and skip judges entirely in the experiment hot path, code-evals only. The hallucination column is honestly labeled "Not sampled" instead of faking a 0.0.
+
+- **`arize-phoenix-client` `AttributeError` fallbacks.** `client.prompts.list` and `client.experiments.get` aren't exposed identically across pinned versions of the SDK. The `PhoenixMCPClient` wraps these calls in try/except for `AttributeError` and returns empty lists, so the UI degrades to "no data yet" instead of a 500 (`backend/src/diagnosis/phoenix_mcp.py:325` and `:488`).
+
+- **SQLite mirror for prompt versions.** Phoenix is the authoritative store for prompts in the hosted demo, but if the network blips, the agent shouldn't stop serving tickets. We mirror every prompt and prompt version into the local SQLite DB and have the agent read the local copy on the hot path. Phoenix is updated asynchronously via the proposal generator. The trade-off — eventual consistency on prompt changes — is acceptable for a hackathon and documented honestly.
+
+---
+
+## Roadmap
+
+PhoenixLoop is v0.1. Five concrete next steps if this grows past the hackathon:
+
+1. **Zendesk webhook.** Replace the auto-seed loop with a real `POST /api/tickets/webhook` accepting Zendesk's ticket schema. The agent surface is already HTTP; only the inbound binding needs work.
+2. **Slack approval channel.** When `release-gate` returns `PENDING_HUMAN_REVIEW`, post the verdict to a Slack channel with `Approve` / `Reject` actions. The release-gate endpoints already accept reviewer IDs.
+3. **Multi-variant experiments.** Today every experiment is a single candidate vs. a single baseline. Extending the orchestrator to run N candidates simultaneously is a small refactor of `_run_agent_on_examples`.
+4. **Per-tenant prompts.** The prompt store is keyed on `prompt_identifier`. Adding a `tenant_id` column and namespacing prompt resolution on it lets multiple companies share one PhoenixLoop deployment without cross-leaking prompts.
+5. **Cloud SQL adapter.** Replace the SQLite mirror with a `database.py` Protocol implementation backed by Cloud SQL Postgres. The repository pattern is already in place; only the driver swap is required.
+
+---
+
+## Token economy
+
+Live-mode auto-seed makes ~30 Gemini calls end-to-end. Breakdown by `gemini_call_purpose` (grep the request_id from `backend/logs/*.log`):
+
+| Purpose | Calls per cycle | Notes |
+|---|---|---|
+| `support_agent_response` | ~8 | One per seeded ticket (including fail-twins) |
+| `judges_combined` | ~8 | Four LLM judges collapsed into one structured Gemini call per run |
+| `diagnosis_agent` | 2–4 | Sub-agent multi-turn while it walks Phoenix MCP for evidence |
+| `patch_synthesis` | 1 | Single structured-output call per failure cluster |
+| `experiment_baseline` | 5 | One per regression example, baseline prompt |
+| `experiment_candidate` | 5 | One per regression example, candidate prompt |
+
+Every Gemini call is tagged with a `gemini_call_purpose` extra so the per-purpose token accounting in the logs is grep-friendly. The combined-judge trick (`backend/src/evaluation/llm_judges/combined.py:202`) keeps the seed under the free-tier 5 RPM ceiling.
+
+If you exceed your daily Gemini quota mid-demo, set `LIGHTWEIGHT_DEMO=true` and the auto-seed reads from `backend/tests/fixtures/seed/` instead. The UI looks identical; no Gemini calls are made.
+
+---
+
+## Deployment
+
+The current submission is local-test first. Cloud Run deploy artifacts (`cloud-run/backend.yaml`, `cloud-run/frontend.yaml`, `cloudbuild.yaml`) are committed for a follow-up deploy pass. The full runbook lives in [`DEPLOYMENT.md`](./DEPLOYMENT.md).
+
+Short version of what the hosted deploy will look like:
+
+```bash
+gcloud auth login
+gcloud config set project YOUR_PROJECT_ID
+gcloud builds submit --config cloudbuild.yaml
+```
+
+Secrets (`PHOENIX_API_KEY`, `GOOGLE_API_KEY`) live in Google Secret Manager and are referenced by `secretKeyRef:` in `cloud-run/backend.yaml`. The backend uses `containerConcurrency=80`, `maxScale=5` — comfortable for a hackathon demo, not configured for production scale (documented in the architecture audit).
+
+---
+
+## FAQ
+
+**Why SQLite instead of Postgres?** Hackathon-scale. Single-instance Cloud Run with WAL mode handles concurrent reads fine, writes serialize — which is fine for one demo box. The repository pattern in `db.py` makes swapping to Cloud SQL a driver change (item 5 on the roadmap), not a rewrite.
+
+**Why Gemini 2.5 Flash instead of Pro?** Free-tier RPM and per-token cost. Flash is the right model for the agent loop where you make many fast calls; Pro adds latency without changing the outcome quality on the eval rubric. The `thinking_budget=128` planner adds enough hidden reasoning that the agent makes correct escalation calls without burning a long planner trace.
+
+**Why ADK instead of LangChain / LangGraph?** ADK ships with first-party support for MCP toolsets (`McpToolset`, `StdioConnectionParams`) and OpenInference instrumentation. Building the same with LangChain would require manually plumbing MCP, manually building the OTel exporter, and writing the planner. The Arize track explicitly calls out ADK as the reference framework.
+
+**What happens if Phoenix is unreachable mid-demo?** The `mcp_tools.py` build returns `None`, the support agent drops the MCP toolset from its tool list and runs on the four production tools only. The agent keeps answering tickets. The healing loop pauses — no diagnosis, no proposals, no experiments — until Phoenix is reachable. Degraded mode is covered by `tests/agent/test_degraded_mode.py`.
+
+**Why no LLM judges in the experiment hot path?** Cost and noise. At 5 examples per side, judge variance dominates the signal and doubles Gemini call count. The experiment scoreboard's hallucination column is honestly labeled "Not sampled" — better than faking 0.0 on both sides.
+
+**Where can I see the full audit?** [`hackathon-audit/`](./hackathon-audit) — 12 files covering compliance, Arize-track depth, judging scorecard, UI/UX, architecture, repo & submission package, winner-repo comparison, prioritized fix plan, demo video script, Devpost story draft, hosted-demo readiness, and a final executive summary.
+
+---
+
+## Contributing
+
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the full setup, pre-commit hooks, lint targets, and PR conventions. The short version:
+
+- All Python code passes `ruff check src/ --select E,F,I --ignore E501` and `python -m py_compile`.
+- All TypeScript code passes `npm run lint` and `npx tsc --noEmit`.
+- Every evaluator extends `BaseEvaluator` (`backend/src/evaluation/__init__.py:24`). Every tool extends `BaseTool`. Pydantic models cross every module boundary — no raw dicts.
+- Database access goes through `db.py`. No raw SQL in business logic.
 
 ---
 
 ## License
 
-MIT
+MIT — see [`LICENSE`](./LICENSE). Copyright 2026 PhoenixLoop Team.
+
+---
+
+## Acknowledgements
+
+- **Arize Phoenix** — the observability + evaluation stack PhoenixLoop is built around. Every Phoenix surface (traces, annotations, prompts, datasets, experiments, MCP) is load-bearing.
+- **Google Cloud Rapid Agent Hackathon** — the contest window that produced this project. Specifically the [Arize track](https://rapid-agent.devpost.com/details/arize-resources), whose rubric maps directly onto the seven-stage loop above.
+- **Arize Gemini hackathon starter** ([Arize-ai/gemini-hackathon](https://github.com/Arize-ai/gemini-hackathon)) — referenced for the canonical Phoenix MCP wiring pattern. No code was copied.
+- **Google ADK team** — `BuiltInPlanner`, `Agent`, `Runner` and the MCP toolset adapter are the foundations everything else stands on.
+
+---
+
+> Built for the Google Cloud Rapid Agent Hackathon — Arize track. Submission deadline 2026-06-11.

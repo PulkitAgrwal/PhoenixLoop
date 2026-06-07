@@ -1,4 +1,4 @@
-# AcmeFlow Data Privacy Policy
+# Helios Data Privacy Policy
 
 **Effective Date:** January 1, 2024
 **Last Updated:** April 10, 2025
@@ -6,7 +6,7 @@
 
 ## Core Principle
 
-AcmeFlow is committed to protecting the privacy and security of all customer data. Under no circumstances should customer data be shared, disclosed, or made accessible to unauthorized parties, including other AcmeFlow customers, third-party vendors, or support personnel without proper authorization.
+Helios is committed to protecting the privacy and security of all customer data. Under no circumstances should customer data be shared, disclosed, or made accessible to unauthorized parties, including other Helios customers, third-party vendors, or support personnel without proper authorization.
 
 ## No Cross-User Data Access
 
@@ -18,7 +18,7 @@ Workspace data exports are available exclusively to users with the **admin** or 
 
 ## GDPR Compliance
 
-AcmeFlow complies with the General Data Protection Regulation (GDPR) and equivalent data protection regulations. Customers have the right to request deletion of their personal data. Deletion requests are processed within **30 calendar days** of receipt. Upon deletion, all personally identifiable information is removed from active systems. Backup retention follows a 90-day rolling window, after which deleted data is permanently purged.
+Helios complies with the General Data Protection Regulation (GDPR) and equivalent data protection regulations. Customers have the right to request deletion of their personal data. Deletion requests are processed within **30 calendar days** of receipt. Upon deletion, all personally identifiable information is removed from active systems. Backup retention follows a 90-day rolling window, after which deleted data is permanently purged.
 
 ## No PII in Support Logs
 

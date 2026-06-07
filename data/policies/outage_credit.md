@@ -1,4 +1,4 @@
-# AcmeFlow Outage Credit Policy
+# Helios Outage Credit Policy
 
 **Effective Date:** January 1, 2024
 **Last Updated:** February 5, 2025
@@ -6,7 +6,7 @@
 
 ## Service Level Agreement (SLA)
 
-AcmeFlow provides the following uptime guarantees based on plan tier:
+Helios provides the following uptime guarantees based on plan tier:
 
 | Plan | Uptime SLA |
 |------|-----------|
@@ -15,7 +15,7 @@ AcmeFlow provides the following uptime guarantees based on plan tier:
 | Business | 99.9% monthly uptime |
 | Enterprise | 99.95% monthly uptime |
 
-Uptime is calculated as the percentage of total minutes in a calendar month during which the AcmeFlow platform is available and functional. Scheduled maintenance windows, announced at least 48 hours in advance, are excluded from uptime calculations.
+Uptime is calculated as the percentage of total minutes in a calendar month during which the Helios platform is available and functional. Scheduled maintenance windows, announced at least 48 hours in advance, are excluded from uptime calculations.
 
 ## Credit Calculation
 

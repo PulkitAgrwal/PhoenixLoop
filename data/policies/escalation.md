@@ -1,4 +1,4 @@
-# AcmeFlow Escalation Rules
+# Helios Escalation Rules
 
 **Effective Date:** January 1, 2024
 **Last Updated:** April 1, 2025
@@ -6,7 +6,7 @@
 
 ## Purpose
 
-This document defines the mandatory escalation rules for the AcmeFlow support team. Certain customer interactions require immediate escalation to specialized teams. Failure to escalate when required is a critical compliance violation.
+This document defines the mandatory escalation rules for the Helios support team. Certain customer interactions require immediate escalation to specialized teams. Failure to escalate when required is a critical compliance violation.
 
 ## Mandatory Escalation Triggers
 
