@@ -44,7 +44,7 @@ export function EvalBadge({ evalResult, compact = false }: EvalBadgeProps) {
         <span
           className={cn(
             "text-xs font-medium",
-            pass ? "text-green-400" : "text-red-400"
+            pass ? "text-brand-soft" : "text-fail"
           )}
         >
           {pass ? "PASS" : "FAIL"}
@@ -71,8 +71,8 @@ export function EvalBadge({ evalResult, compact = false }: EvalBadgeProps) {
           <TooltipTrigger asChild>
             <span
               className={cn(
-                "inline-block h-2.5 w-2.5 rounded-full cursor-default",
-                pass ? "bg-green-500" : "bg-red-500"
+                "inline-block h-2.5 w-2.5 rounded-pill cursor-default",
+                pass ? "bg-brand" : "bg-fail"
               )}
               aria-label={`${evalResult.evaluator_name}: ${pass ? "pass" : "fail"}`}
             />
@@ -92,8 +92,8 @@ export function EvalBadge({ evalResult, compact = false }: EvalBadgeProps) {
             className={cn(
               "inline-flex items-center gap-1 cursor-default select-none font-mono text-[11px] px-1.5 py-0.5",
               pass
-                ? "border-green-200 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950 dark:text-green-400"
-                : "border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400"
+                ? "border-brand/40 bg-brand/[0.06] text-brand-soft"
+                : "border-fail/40 bg-fail/[0.08] text-fail"
             )}
           >
             {pass ? (

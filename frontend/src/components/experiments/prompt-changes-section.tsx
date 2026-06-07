@@ -68,9 +68,9 @@ export function PromptChangesSection({
         </motion.span>
         <span className="font-semibold text-sm flex-1">Prompt Changes</span>
         <span className="text-xs font-mono tabular-nums">
-          <span className="text-green-600">+{counts.added}</span>
+          <span className="text-brand-soft">+{counts.added}</span>
           {" / "}
-          <span className="text-red-600">-{counts.removed}</span>
+          <span className="text-fail">-{counts.removed}</span>
         </span>
         <Badge variant="outline" className="text-xs font-mono">
           {baselineVersion} → {candidateVersion}

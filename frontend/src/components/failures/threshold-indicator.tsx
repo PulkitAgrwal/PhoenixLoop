@@ -18,17 +18,12 @@ export function ThresholdIndicator({
   const isAbove = current >= threshold;
   const isApproaching = !isAbove && percentage >= 75;
 
-  const barColor = isAbove
-    ? "bg-red-500"
-    : isApproaching
-    ? "bg-amber-500"
-    : "bg-green-500";
-
+  const barColor = isAbove ? "bg-fail" : isApproaching ? "bg-warn" : "bg-brand";
   const textColor = isAbove
-    ? "text-red-600 dark:text-red-400"
+    ? "text-fail"
     : isApproaching
-    ? "text-amber-600 dark:text-amber-400"
-    : "text-green-600 dark:text-green-400";
+      ? "text-warn"
+      : "text-brand-soft";
 
   return (
     <div className="space-y-1.5">

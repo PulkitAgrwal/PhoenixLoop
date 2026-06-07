@@ -11,6 +11,7 @@ import { MessageBubble } from "@/components/conversation/message-bubble";
 import { ToolCallCard } from "@/components/conversation/tool-call-card";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+import type { StreamEvent } from "@/lib/api";
 import {
   SupportTicket,
   AgentRun,
@@ -20,6 +21,8 @@ import {
 
 interface ChatInterfaceProps {
   ticket: SupportTicket | null;
+  onRunStateChange?: (running: boolean) => void;
+  onLastRunChange?: (run: AgentRun | null) => void;
 }
 
 interface ChatMessage {
@@ -33,27 +36,32 @@ interface ChatMessage {
   phoenixSessionId?: string | null;
 }
 
-function TypingIndicator() {
+function TypingIndicator({ phase }: { phase: "thinking" | "evals" }) {
+  const label = phase === "thinking" ? "agent thinking" : "running evals";
+  const dotClass = phase === "thinking" ? "bg-brand" : "bg-mute";
   return (
     <motion.div
+      key={phase}
       initial={{ opacity: 0, x: -16 }}
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: -16 }}
       transition={{ duration: 0.2 }}
       className="flex items-center gap-2 pl-11"
     >
-      <div className="flex items-center gap-1 rounded-2xl rounded-tl-sm border border-border bg-muted px-4 py-3 shadow-sm">
+      <div className="flex items-center gap-2 rounded-md border border-hairline bg-canvas-soft px-4 py-3">
+        <span className="font-mono text-code text-mute">{label}</span>
         {[0, 1, 2].map((i) => (
           <motion.span
             key={i}
-            className="block h-2 w-2 rounded-full bg-muted-foreground/60"
-            animate={{ y: [0, -5, 0] }}
+            className={cn("block h-1.5 w-1.5 rounded-pill", dotClass)}
+            animate={{ opacity: [0.3, 1, 0.3] }}
             transition={{
               repeat: Infinity,
-              duration: 0.8,
-              delay: i * 0.15,
+              duration: 1.2,
+              delay: i * 0.18,
               ease: "easeInOut",
             }}
+            aria-hidden
           />
         ))}
       </div>
@@ -99,12 +107,49 @@ function extractAgentText(run: AgentRun): string {
   return JSON.stringify(resp, null, 2);
 }
 
-export function ChatInterface({ ticket }: ChatInterfaceProps) {
+// The agent streams a JSON document character-by-character (matches the
+// AgentResponseContract schema). Pull the answer field out of the partial
+// stream so the bubble shows clean prose instead of a raw JSON dump.
+function extractStreamedAnswer(text: string): string {
+  if (!text) return "";
+  const trimmed = text.trimStart();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return text;
+  for (const field of ["answer", "text", "content", "message", "response"]) {
+    const re = new RegExp(`"${field}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)`);
+    const match = text.match(re);
+    if (match) {
+      try {
+        return JSON.parse(`"${match[1]}"`);
+      } catch {
+        return match[1]
+          .replace(/\\n/g, "\n")
+          .replace(/\\t/g, "\t")
+          .replace(/\\"/g, '"')
+          .replace(/\\\\/g, "\\");
+      }
+    }
+  }
+  return "";
+}
+
+export function ChatInterface({
+  ticket,
+  onRunStateChange,
+  onLastRunChange,
+}: ChatInterfaceProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastRun, setLastRun] = useState<AgentRun | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    onRunStateChange?.(isRunning);
+  }, [isRunning, onRunStateChange]);
+
+  useEffect(() => {
+    onLastRunChange?.(lastRun);
+  }, [lastRun, onLastRunChange]);
 
   // Reset conversation when ticket changes
   useEffect(() => {
@@ -142,39 +187,148 @@ export function ChatInterface({ ticket }: ChatInterfaceProps) {
     setError(null);
     setIsRunning(true);
 
-    try {
-      const res = await api.tickets.run(ticket.ticket_id);
-      if (!res.ok || !res.data) {
-        setError(res.error ?? "Agent run failed");
-        return;
+    // Build an in-flight agent message that we mutate as events arrive.
+    // `currentId` starts as a synthetic placeholder and is swapped to the real
+    // agent_run_id when the `agent_done` event lands, so subsequent eval
+    // updates still find the message.
+    let currentId = `agent-inflight-${Date.now()}`;
+    const inflightCreatedAt = new Date().toISOString();
+    const toolsByIndex = new Map<number, ToolCallRecord>();
+    const evalsAccum: EvalResult[] = [];
+    let liveText = "";
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: currentId,
+        role: "agent",
+        content: "",
+        timestamp: inflightCreatedAt,
+        toolCalls: [],
+        evals: [],
+        traceId: null,
+        phoenixSessionId: null,
+      },
+    ]);
+
+    const renderInflight = () => {
+      const orderedTools = Array.from(toolsByIndex.entries())
+        .sort(([a], [b]) => a - b)
+        .map(([, tc]) => tc);
+      const targetId = currentId;
+      const displayText = extractStreamedAnswer(liveText) || liveText;
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === targetId
+            ? {
+                ...m,
+                content: displayText,
+                toolCalls: orderedTools,
+                evals: [...evalsAccum],
+              }
+            : m,
+        ),
+      );
+      // Surface live tool calls to the LiveTracePane via lastRun so the
+      // right-hand trace pane updates in step with the chat panel.
+      setLastRun((prev) => {
+        const base: AgentRun =
+          prev ??
+          ({
+            agent_run_id: "inflight",
+            conversation_session_id: "",
+            ticket_id: ticket?.ticket_id ?? "",
+            agent_name: "helios_support_agent",
+            agent_version: "1.0.0",
+            prompt_version: "production",
+            trace_id: null,
+            root_span_id: null,
+            phoenix_session_id: null,
+            input_hash: null,
+            response_json: {},
+            tool_calls_json: [],
+            status: "running",
+            latency_ms: null,
+            token_count_input: null,
+            token_count_output: null,
+            created_at: inflightCreatedAt,
+          } as AgentRun);
+        return { ...base, tool_calls_json: orderedTools };
+      });
+    };
+
+    const handleEvent = (event: StreamEvent) => {
+      switch (event.type) {
+        case "agent_start":
+          break;
+        case "tool_call_started": {
+          toolsByIndex.set(event.index, {
+            tool_name: event.tool_name,
+            input: event.input,
+            output: {},
+            status: "pending",
+            latency_ms: null,
+            span_id: null,
+          } as ToolCallRecord);
+          renderInflight();
+          break;
+        }
+        case "tool_call_completed": {
+          const existing = toolsByIndex.get(event.index);
+          toolsByIndex.set(event.index, {
+            ...(existing ?? {
+              tool_name: event.tool_name,
+              input: {},
+              span_id: null,
+            }),
+            output: event.output,
+            status: event.status,
+            latency_ms: event.latency_ms,
+          } as ToolCallRecord);
+          renderInflight();
+          break;
+        }
+        case "text_chunk":
+          liveText += event.text;
+          renderInflight();
+          break;
+        case "agent_done": {
+          const run = event.agent_run as unknown as AgentRun;
+          setLastRun(run);
+          const previousId = currentId;
+          const newId = `agent-${run.agent_run_id}`;
+          currentId = newId;
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === previousId
+                ? {
+                    ...m,
+                    id: newId,
+                    content: extractAgentText(run),
+                    timestamp: run.created_at,
+                    toolCalls: run.tool_calls_json ?? Array.from(toolsByIndex.values()),
+                    traceId: run.trace_id,
+                    phoenixSessionId: run.phoenix_session_id,
+                  }
+                : m,
+            ),
+          );
+          break;
+        }
+        case "eval_result":
+          evalsAccum.push(event.result as unknown as EvalResult);
+          renderInflight();
+          break;
+        case "done":
+          break;
+        case "error":
+          setError(event.error);
+          break;
       }
+    };
 
-      // POST /tickets/{id}/run wraps the result as
-      // { agent_run, eval_results, triggers_created } — unwrap it.
-      const payload = res.data as {
-        agent_run: AgentRun;
-        eval_results: EvalResult[];
-        triggers_created: number;
-      };
-      const run = payload.agent_run;
-      const evals = payload.eval_results ?? [];
-      setLastRun(run);
-
-      const agentText = extractAgentText(run);
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `agent-${run.agent_run_id}`,
-          role: "agent",
-          content: agentText,
-          timestamp: run.created_at,
-          toolCalls: run.tool_calls_json ?? [],
-          evals,
-          traceId: run.trace_id,
-          phoenixSessionId: run.phoenix_session_id,
-        },
-      ]);
+    try {
+      await api.tickets.runStream(ticket.ticket_id, handleEvent);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unexpected error");
     } finally {
@@ -199,19 +353,25 @@ export function ChatInterface({ ticket }: ChatInterfaceProps) {
   };
 
   const hasAgentResponse = messages.some((m) => m.role === "agent");
+  const lastAgentMsg = [...messages].reverse().find((m) => m.role === "agent");
+  const hasStreamedText =
+    (lastAgentMsg?.content?.trim().length ?? 0) > 0;
+  const indicatorPhase: "thinking" | "evals" = hasStreamedText
+    ? "evals"
+    : "thinking";
   const phoenixBaseUrl =
     process.env.NEXT_PUBLIC_PHOENIX_URL ?? "http://localhost:6006";
 
   if (!ticket) {
     return (
-      <div className="flex h-full min-h-[400px] items-center justify-center text-center">
-        <div className="flex flex-col items-center gap-3 text-muted-foreground">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-            <Activity className="h-6 w-6" />
+      <div className="flex h-full min-h-[480px] items-center justify-center rounded-md border border-hairline bg-canvas">
+        <div className="flex max-w-[42ch] flex-col items-center gap-3 text-center">
+          <div className="flex h-10 w-10 items-center justify-center rounded-sm border border-hairline bg-canvas-soft text-mute">
+            <Activity className="h-5 w-5" aria-hidden />
           </div>
-          <p className="text-sm font-medium">Select a ticket scenario above</p>
-          <p className="text-xs">
-            Choose a demo support ticket to run the agent and observe the conversation.
+          <p className="text-body-md-strong text-ink-strong">No ticket selected.</p>
+          <p className="text-body-sm text-body">
+            Pick a scenario above to load a customer message and run the agent against it.
           </p>
         </div>
       </div>
@@ -301,17 +461,24 @@ export function ChatInterface({ ticket }: ChatInterfaceProps) {
       </div>
 
       {/* Chat window */}
-      <div className="rounded-xl border bg-background shadow-sm overflow-hidden">
+      <div className="rounded-md border border-hairline bg-canvas overflow-hidden">
         <ScrollArea ref={scrollRef} className="h-[520px] w-full">
           <div className="flex flex-col gap-5 p-6">
             <AnimatePresence initial={false}>
               {messages.map((msg) => (
                 <React.Fragment key={msg.id}>
-                  <MessageBubble
-                    role={msg.role}
-                    content={msg.content}
-                    timestamp={msg.timestamp}
-                  />
+                  {/* Render the bubble only when we have something to say.
+                      In-flight agent messages start with empty content while
+                      tool calls stream in; the empty pill + avatar looked
+                      broken, so we suppress it until text arrives. The tool
+                      call list + typing indicator already signal activity. */}
+                  {(msg.role === "user" || msg.content.trim().length > 0) && (
+                    <MessageBubble
+                      role={msg.role}
+                      content={msg.content}
+                      timestamp={msg.timestamp}
+                    />
+                  )}
 
                   {/* Tool calls (shown after agent message) */}
                   {msg.role === "agent" &&
@@ -347,8 +514,8 @@ export function ChatInterface({ ticket }: ChatInterfaceProps) {
             </AnimatePresence>
 
             {/* Typing indicator */}
-            <AnimatePresence>
-              {isRunning && <TypingIndicator />}
+            <AnimatePresence mode="wait">
+              {isRunning && <TypingIndicator phase={indicatorPhase} />}
             </AnimatePresence>
 
             {/* Error */}
@@ -359,8 +526,8 @@ export function ChatInterface({ ticket }: ChatInterfaceProps) {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0 }}
                   className={cn(
-                    "mx-auto rounded-lg border border-red-200 bg-red-50 px-4 py-3",
-                    "text-sm text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-400"
+                    "mx-auto rounded-md border border-fail/40 bg-fail/[0.08] px-4 py-3",
+                    "text-body-sm text-fail"
                   )}
                 >
                   <strong>Error: </strong>

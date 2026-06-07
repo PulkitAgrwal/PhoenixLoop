@@ -1,34 +1,21 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import {
-  AlertCircle,
-  ArrowRight,
-  FlaskConical,
-  RefreshCw,
-} from "lucide-react";
-import { StatusBadge } from "@/components/shared/status-badge";
-import { TableSkeleton } from "@/components/shared/loading-skeleton";
-import { ScoreComparison } from "@/components/experiments/score-comparison";
-import { EvalBarChart } from "@/components/experiments/eval-bar-chart";
-import { RegressionResults } from "@/components/experiments/regression-results";
-import { PromptChangesSection } from "@/components/experiments/prompt-changes-section";
+import { AlertCircle, ArrowRight, RefreshCw } from "lucide-react";
+
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { Separator } from "@/components/ui/separator";
+import { Eyebrow } from "@/components/ui/eyebrow";
+import { Tag } from "@/components/ui/tag";
+import { StatusDot } from "@/components/ui/status-dot";
+import { CodeInline } from "@/components/ui/code-inline";
+import { PhoenixDeepLink } from "@/components/shared/phoenix-deep-link";
+import { ScoreComparison } from "@/components/experiments/score-comparison";
+import { PromptChangesSection } from "@/components/experiments/prompt-changes-section";
 import { api } from "@/lib/api";
-import {
+import type {
   ExperimentRecord,
   ExperimentStatus,
   ReleaseDecision,
@@ -36,187 +23,48 @@ import {
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function experimentStatusVariant(
-  status: ExperimentStatus
-): "warning" | "info" | "success" | "error" | "pending" {
-  switch (status) {
-    case "pending":
-      return "warning";
-    case "running":
-      return "info";
-    case "completed":
-      return "success";
-    case "failed":
-      return "error";
-  }
-}
-
-function formatDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  } catch {
-    return iso;
-  }
-}
-
-function scoreDelta(
-  baseline: number | null,
-  candidate: number | null
-): string {
-  if (baseline == null || candidate == null) return "—";
-  const delta = (candidate - baseline) * 100;
-  return `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}`;
-}
-
-function scoreDeltaPositive(
-  baseline: number | null,
-  candidate: number | null
-): boolean | null {
-  if (baseline == null || candidate == null) return null;
-  return candidate >= baseline;
-}
-
-// ─── Verdict Badge ────────────────────────────────────────────────────────────
-
-interface VerdictBadgeProps {
-  decision: ReleaseDecision;
-}
-
-const verdictConfig: Record<
-  ReleaseDecision,
-  { label: string; className: string }
-> = {
-  promoted: {
-    label: "PROMOTED",
-    className:
-      "border-emerald-300 bg-emerald-100 text-emerald-800 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
-  },
-  rejected: {
-    label: "REJECTED",
-    className:
-      "border-red-300 bg-red-100 text-red-800 dark:border-red-700 dark:bg-red-950 dark:text-red-300",
-  },
-  pending_human_review: {
-    label: "PENDING REVIEW",
-    className:
-      "border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-300",
-  },
-  blocked_critical_failure: {
-    label: "BLOCKED",
-    className:
-      "border-red-300 bg-red-100 text-red-800 dark:border-red-700 dark:bg-red-950 dark:text-red-300",
-  },
+const STATUS_TONE: Record<ExperimentStatus, "brand" | "warn" | "mute" | "fail"> = {
+  pending: "warn",
+  running: "warn",
+  completed: "brand",
+  failed: "fail",
 };
 
-function VerdictBadge({ decision }: VerdictBadgeProps) {
-  const config = verdictConfig[decision];
-  return (
-    <motion.div
-      initial={{ opacity: 0, scale: 0.85 }}
-      animate={{ opacity: 1, scale: 1 }}
-      transition={{ duration: 0.3, type: "spring", stiffness: 300, damping: 20 }}
-    >
-      <Badge
-        variant="outline"
-        className={cn(
-          "px-3 py-1 text-sm font-bold tracking-wide",
-          config.className
-        )}
-      >
-        {config.label}
-      </Badge>
-    </motion.div>
-  );
+const VERDICT_TONE: Record<ReleaseDecision, "brand" | "warn" | "mute" | "fail"> = {
+  promoted: "brand",
+  rejected: "fail",
+  pending_human_review: "warn",
+  blocked_critical_failure: "fail",
+};
+
+const VERDICT_LABEL: Record<ReleaseDecision, string> = {
+  promoted: "PROMOTED",
+  rejected: "REJECTED",
+  pending_human_review: "PENDING REVIEW",
+  blocked_critical_failure: "BLOCKED",
+};
+
+function fmtDelta(base: number | null, cand: number | null): {
+  text: string;
+  positive: boolean | null;
+} {
+  if (base === null || cand === null) return { text: "—", positive: null };
+  const delta = (cand - base) * 100;
+  return {
+    text: `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}`,
+    positive: delta >= 0,
+  };
 }
 
-// ─── Experiment Detail Panel ───────────────────────────────────────────────────
-
-interface ExperimentDetailProps {
-  experiment: ExperimentRecord;
-  releaseGate: ReleaseGateDecision | null;
-  baselinePromptText: string | null;
-  candidatePromptText: string | null;
+function timeAgo(iso: string): string {
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return iso;
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
 }
-
-function ExperimentDetail({
-  experiment,
-  releaseGate,
-  baselinePromptText,
-  candidatePromptText,
-}: ExperimentDetailProps) {
-  const router = useRouter();
-
-  return (
-    <div className="space-y-5">
-      {/* Verdict */}
-      {releaseGate && (
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div className="space-y-0.5">
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Release Decision
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Score:{" "}
-              <span className="font-mono tabular-nums">
-                {(releaseGate.release_score * 100).toFixed(1)}
-              </span>{" "}
-              · Rules passed:{" "}
-              <span className="font-mono tabular-nums">
-                {releaseGate.promotion_rules_passed}
-              </span>
-            </p>
-          </div>
-          <VerdictBadge decision={releaseGate.decision} />
-        </div>
-      )}
-
-      {/* Score Comparison */}
-      <ScoreComparison experiment={experiment} />
-
-      {/* Prompt Changes (collapsible diff between baseline and candidate) */}
-      <PromptChangesSection
-        baseline={baselinePromptText}
-        candidate={candidatePromptText}
-        baselineVersion={experiment.baseline_prompt_version}
-        candidateVersion={experiment.candidate_prompt_version}
-      />
-
-      <Separator />
-
-      {/* Bar Chart */}
-      <EvalBarChart experiment={experiment} />
-
-      <Separator />
-
-      {/* Regression Results */}
-      <RegressionResults
-        passRate={experiment.regression_cases_pass_rate}
-        safetyRate={experiment.safety_canary_pass_rate}
-      />
-
-      {/* Action buttons */}
-      <div className="flex flex-wrap items-center gap-2 pt-1">
-        <Button
-          size="sm"
-          variant="outline"
-          className="gap-2"
-          onClick={() => router.push("/healing/release-gate")}
-        >
-          View Release Gate
-          <ArrowRight className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-// ─── Page ─────────────────────────────────────────────────────────────────────
 
 interface ExperimentDetailData {
   experiment: ExperimentRecord;
@@ -226,29 +74,22 @@ interface ExperimentDetailData {
 }
 
 export default function ExperimentsPage() {
-  const [experiments, setExperiments] = useState<ExperimentRecord[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [selectedDetail, setSelectedDetail] =
-    useState<ExperimentDetailData | null>(null);
-  const [loadingList, setLoadingList] = useState(true);
-  const [loadingDetail, setLoadingDetail] = useState(false);
-  const [listError, setListError] = useState<string | null>(null);
+  const router = useRouter();
+  const [experiments, setExperiments] = React.useState<ExperimentRecord[]>([]);
+  const [selectedId, setSelectedId] = React.useState<string | null>(null);
+  const [detail, setDetail] = React.useState<ExperimentDetailData | null>(null);
+  const [loadingList, setLoadingList] = React.useState(true);
+  const [loadingDetail, setLoadingDetail] = React.useState(false);
+  const [listError, setListError] = React.useState<string | null>(null);
 
-  // Load experiments list
-  const loadList = useCallback(async () => {
+  const loadList = React.useCallback(async () => {
     setListError(null);
     setLoadingList(true);
     try {
       const res = await api.experiments.list();
       if (res.ok && res.data) {
-        const raw = res.data as
-          | ExperimentRecord[]
-          | { items: ExperimentRecord[] };
-        setExperiments(
-          Array.isArray(raw)
-            ? raw
-            : (raw as { items: ExperimentRecord[] }).items ?? []
-        );
+        const raw = res.data as ExperimentRecord[] | { items: ExperimentRecord[] };
+        setExperiments(Array.isArray(raw) ? raw : raw.items ?? []);
       } else {
         setListError(res.error ?? "Failed to load experiments");
       }
@@ -259,29 +100,32 @@ export default function ExperimentsPage() {
     }
   }, []);
 
-  useEffect(() => {
+  React.useEffect(() => {
     loadList();
   }, [loadList]);
 
-  // Load detail when selectedId changes
-  const loadDetail = useCallback(async (id: string) => {
+  const loadDetail = React.useCallback(async (id: string) => {
     setLoadingDetail(true);
     try {
       const res = await api.experiments.get(id);
-      if (res.ok && res.data) {
-        const raw = res.data as ExperimentDetailData;
-        setSelectedDetail(raw);
-      }
+      if (res.ok && res.data) setDetail(res.data as ExperimentDetailData);
     } catch {
-      // silently ignore
+      /* swallow */
     } finally {
       setLoadingDetail(false);
     }
   }, []);
 
-  const handleSelectExperiment = (id: string) => {
+  React.useEffect(() => {
+    if (selectedId === null && experiments[0]) {
+      setSelectedId(experiments[0].experiment_id);
+      loadDetail(experiments[0].experiment_id);
+    }
+  }, [experiments, selectedId, loadDetail]);
+
+  const handleSelect = (id: string) => {
     setSelectedId(id);
-    setSelectedDetail(null);
+    setDetail(null);
     loadDetail(id);
   };
 
@@ -291,150 +135,127 @@ export default function ExperimentsPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-end">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleRefresh}
-          className="gap-2"
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-          Refresh
-        </Button>
-      </div>
+    <div className="mx-auto max-w-[1280px] px-5 py-10 lg:px-8 lg:py-14">
+      <header className="flex flex-col gap-3">
+        <Eyebrow tone="brand">Healing · Experiments</Eyebrow>
+        <h1 className="text-display-lg text-ink-strong">
+          Baseline vs candidate. Code-evals only.
+        </h1>
+        <p className="max-w-[68ch] text-body-md text-body">
+          Each experiment scores the baseline and candidate prompts against the regression
+          set with deterministic <CodeInline>code_evals</CodeInline> — no LLM judges in the hot
+          path. The release gate decides whether the candidate ships.
+        </p>
+      </header>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[400px_1fr]">
-        {/* ── Left: Experiments List ── */}
-        <div className="flex flex-col gap-3">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Experiments
-          </h2>
+      <section
+        className="mt-8 grid grid-cols-1 gap-px overflow-hidden rounded-md border border-hairline bg-hairline lg:grid-cols-[420px,1fr]"
+        aria-label="Experiments"
+      >
+        <div className="bg-canvas">
+          <div className="flex items-center justify-between border-b border-hairline bg-canvas-soft px-4 py-2.5">
+            <Eyebrow tone="mute">Runs</Eyebrow>
+            <Button variant="ghost" size="sm" onClick={handleRefresh}>
+              <RefreshCw className="h-3.5 w-3.5" />
+              Refresh
+            </Button>
+          </div>
 
           {loadingList ? (
-            <TableSkeleton rows={4} />
+            <div className="flex flex-col gap-px bg-hairline">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="h-20 bg-canvas animate-pulse" />
+              ))}
+            </div>
           ) : listError ? (
-            <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-400">
-              <AlertCircle className="h-4 w-4 shrink-0" />
+            <div className="m-4 rounded-md border border-fail/40 bg-fail/[0.06] px-4 py-3 text-body-sm text-fail">
+              <AlertCircle className="inline h-4 w-4 mr-2 align-text-bottom" aria-hidden />
               {listError}
             </div>
           ) : experiments.length === 0 ? (
-            <motion.div
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="rounded-lg border border-dashed border-border p-6 text-center"
-            >
-              <FlaskConical className="mx-auto mb-2 h-8 w-8 text-muted-foreground/40" />
-              <p className="text-sm text-muted-foreground">
-                No experiments yet.
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Create one from the{" "}
-                <Link
-                  href="/healing/improvements"
-                  className="text-primary underline-offset-4 hover:underline"
-                >
-                  Improvements
+            <div className="flex flex-col items-center gap-3 px-6 py-12 text-center">
+              <p className="text-body-sm text-body max-w-[40ch]">
+                No experiments yet. Create one from the{" "}
+                <Link href="/healing/improvements" className="text-brand-soft underline-offset-2 hover:underline">
+                  improvements
                 </Link>{" "}
                 page.
               </p>
-            </motion.div>
+            </div>
           ) : (
-            <div className="rounded-lg border border-border overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-muted/40">
-                    <TableHead className="text-xs">ID / Versions</TableHead>
-                    <TableHead className="text-xs">Status</TableHead>
-                    <TableHead className="text-xs text-right">Delta</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {experiments.map((exp, idx) => {
-                    const delta = scoreDelta(
-                      exp.baseline_release_score,
-                      exp.candidate_release_score
-                    );
-                    const deltaPos = scoreDeltaPositive(
-                      exp.baseline_release_score,
-                      exp.candidate_release_score
-                    );
-
-                    return (
-                      <motion.tr
-                        key={exp.experiment_id}
-                        initial={{ opacity: 0, x: -8 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ duration: 0.2, delay: idx * 0.04 }}
-                        onClick={() =>
-                          handleSelectExperiment(exp.experiment_id)
-                        }
-                        className={cn(
-                          "cursor-pointer border-b border-border transition-colors",
-                          "hover:bg-muted/50",
-                          selectedId === exp.experiment_id &&
-                            "bg-primary/5 hover:bg-primary/5"
-                        )}
-                      >
-                        <TableCell className="py-3">
-                          <div className="space-y-1">
-                            <p className="text-xs font-mono truncate max-w-[160px] text-muted-foreground">
-                              {exp.experiment_id.slice(0, 16)}…
-                            </p>
-                            <div className="flex flex-wrap gap-1">
-                              <Badge
-                                variant="secondary"
-                                className="text-[10px] px-1.5 py-0"
-                              >
-                                {exp.baseline_prompt_version}
-                              </Badge>
-                              <span className="text-[10px] text-muted-foreground self-center">
-                                →
-                              </span>
-                              <Badge
-                                variant="secondary"
-                                className="text-[10px] px-1.5 py-0"
-                              >
-                                {exp.candidate_prompt_version}
-                              </Badge>
-                            </div>
-                            <p className="text-[10px] text-muted-foreground/60">
-                              {formatDate(exp.created_at)}
-                            </p>
-                          </div>
-                        </TableCell>
-                        <TableCell className="py-3">
-                          <StatusBadge
-                            status={experimentStatusVariant(exp.status)}
-                            label={exp.status}
+            <ul role="list" className="divide-y divide-hairline">
+              {experiments.map((exp) => {
+                const selected = exp.experiment_id === selectedId;
+                const delta = fmtDelta(
+                  exp.baseline_release_score,
+                  exp.candidate_release_score
+                );
+                const statusTone = STATUS_TONE[exp.status];
+                return (
+                  <li key={exp.experiment_id}>
+                    <button
+                      type="button"
+                      onClick={() => handleSelect(exp.experiment_id)}
+                      aria-pressed={selected}
+                      className={cn(
+                        "flex w-full flex-col gap-2 px-4 py-3 text-left transition-colors",
+                        selected
+                          ? "bg-canvas-soft border-l-2 border-l-brand"
+                          : "border-l-2 border-l-transparent hover:bg-canvas-soft"
+                      )}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-code text-canvas-text-soft truncate">
+                          {exp.experiment_id.slice(0, 16)}…
+                        </span>
+                        <span className="ml-auto inline-flex items-center gap-1.5 text-caption uppercase tracking-eyebrow">
+                          <StatusDot
+                            tone={statusTone}
+                            size="xs"
                             pulse={exp.status === "running"}
                           />
-                        </TableCell>
-                        <TableCell className="py-3 text-right">
                           <span
                             className={cn(
-                              "text-xs font-mono tabular-nums font-medium",
-                              deltaPos === null
-                                ? "text-muted-foreground"
-                                : deltaPos
-                                ? "text-emerald-600 dark:text-emerald-400"
-                                : "text-red-500 dark:text-red-400"
+                              statusTone === "brand" && "text-brand-soft",
+                              statusTone === "warn" && "text-warn",
+                              statusTone === "fail" && "text-fail",
+                              statusTone === "mute" && "text-mute"
                             )}
                           >
-                            {delta}
+                            {exp.status}
                           </span>
-                        </TableCell>
-                      </motion.tr>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 text-body-sm text-body">
+                        <Tag>{exp.baseline_prompt_version}</Tag>
+                        <ArrowRight className="h-3 w-3 text-mute" aria-hidden />
+                        <Tag tone={delta.positive ? "brand" : "default"}>
+                          {exp.candidate_prompt_version}
+                        </Tag>
+                        <span
+                          className={cn(
+                            "num-mono ml-auto",
+                            delta.positive === true && "text-brand-soft",
+                            delta.positive === false && "text-fail",
+                            delta.positive === null && "text-mute"
+                          )}
+                        >
+                          {delta.text}
+                        </span>
+                      </div>
+                      <span className="text-caption text-mute">
+                        {timeAgo(exp.created_at)}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
           )}
         </div>
 
-        {/* ── Right: Detail Panel ── */}
-        <div>
+        {/* Detail */}
+        <div className="bg-canvas px-5 py-5 lg:px-7 lg:py-7 min-h-[640px]">
           <AnimatePresence mode="wait">
             {!selectedId ? (
               <motion.div
@@ -442,68 +263,104 @@ export default function ExperimentsPage() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="flex h-full min-h-[320px] items-center justify-center rounded-lg border border-dashed border-border"
+                className="flex h-full items-center justify-center"
               >
-                <div className="text-center space-y-2">
-                  <FlaskConical className="mx-auto h-8 w-8 text-muted-foreground/40" />
-                  <p className="text-sm font-medium text-muted-foreground">
-                    Select an experiment to view results
-                  </p>
-                </div>
+                <p className="text-body-sm text-mute">Select an experiment to view results.</p>
               </motion.div>
-            ) : loadingDetail ? (
+            ) : loadingDetail || !detail ? (
               <motion.div
                 key="loading"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="space-y-4"
+                className="flex flex-col gap-4"
               >
                 {[1, 2, 3].map((i) => (
                   <div
                     key={i}
-                    className="h-32 rounded-lg border border-border bg-muted/30 animate-pulse"
+                    className="h-32 rounded-md border border-hairline bg-canvas-soft animate-pulse"
                   />
                 ))}
               </motion.div>
-            ) : selectedDetail ? (
+            ) : (
               <motion.div
-                key={selectedDetail.experiment.experiment_id}
-                initial={{ opacity: 0, x: 16 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -16 }}
-                transition={{ duration: 0.25, ease: "easeOut" }}
+                key={detail.experiment.experiment_id}
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.18 }}
+                className="flex flex-col gap-5"
               >
-                {/* Detail header */}
-                <div className="mb-4 flex items-start justify-between gap-3 flex-wrap">
-                  <div className="space-y-1">
-                    <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                      Detail
-                    </h2>
-                    <p className="text-xs font-mono text-muted-foreground">
-                      {selectedDetail.experiment.experiment_id}
+                <header className="flex flex-wrap items-end justify-between gap-4 border-b border-hairline pb-4">
+                  <div className="flex flex-col gap-1">
+                    <Eyebrow tone="mute">Selected experiment</Eyebrow>
+                    <p className="font-mono text-display-sm text-canvas-text-soft">
+                      {detail.experiment.experiment_id}
                     </p>
+                    <div className="flex items-center gap-3 text-caption text-mute">
+                      <span>{timeAgo(detail.experiment.created_at)}</span>
+                      <span>·</span>
+                      <PhoenixDeepLink experimentId={detail.experiment.experiment_id} />
+                    </div>
                   </div>
-                  <StatusBadge
-                    status={experimentStatusVariant(
-                      selectedDetail.experiment.status
-                    )}
-                    label={selectedDetail.experiment.status}
-                    pulse={selectedDetail.experiment.status === "running"}
-                  />
-                </div>
+                  {detail.release_gate_decision && (
+                    <VerdictPanel decision={detail.release_gate_decision} />
+                  )}
+                </header>
 
-                <ExperimentDetail
-                  experiment={selectedDetail.experiment}
-                  releaseGate={selectedDetail.release_gate_decision}
-                  baselinePromptText={selectedDetail.baseline_prompt_text}
-                  candidatePromptText={selectedDetail.candidate_prompt_text}
+                <ScoreComparison experiment={detail.experiment} />
+
+                <PromptChangesSection
+                  baseline={detail.baseline_prompt_text}
+                  candidate={detail.candidate_prompt_text}
+                  baselineVersion={detail.experiment.baseline_prompt_version}
+                  candidateVersion={detail.experiment.candidate_prompt_version}
                 />
+
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => router.push("/healing/release-gate")}
+                  >
+                    View release gate
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
               </motion.div>
-            ) : null}
+            )}
           </AnimatePresence>
         </div>
+      </section>
+    </div>
+  );
+}
+
+function VerdictPanel({ decision }: { decision: ReleaseGateDecision }) {
+  const tone = VERDICT_TONE[decision.decision];
+  const label = VERDICT_LABEL[decision.decision];
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <Eyebrow tone="mute">Verdict</Eyebrow>
+      <div
+        className={cn(
+          "inline-flex items-center gap-2 rounded-sm border px-3 py-1.5 font-mono text-body-sm font-semibold tracking-wider uppercase",
+          tone === "brand" && "border-brand bg-brand/[0.08] text-brand-soft",
+          tone === "fail" && "border-fail bg-fail/[0.08] text-fail",
+          tone === "warn" && "border-warn bg-warn/[0.08] text-warn",
+          tone === "mute" && "border-hairline bg-canvas-soft text-mute"
+        )}
+      >
+        <StatusDot tone={tone} size="xs" />
+        {label}
       </div>
+      <span className="font-mono text-caption text-mute">
+        score{" "}
+        <span className="num-mono text-canvas-text-soft">
+          {(decision.release_score * 100).toFixed(1)}
+        </span>
+        {" · "}rules <span className="num-mono">{decision.promotion_rules_passed}</span>
+      </span>
     </div>
   );
 }

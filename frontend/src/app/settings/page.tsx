@@ -109,11 +109,9 @@ const fadeUpVariants = {
 
 function EvalTypeBadge({ type }: { type: EvaluatorEntry["type"] }) {
   const styles: Record<EvaluatorEntry["type"], string> = {
-    code: "border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-800 dark:bg-violet-950 dark:text-violet-400",
-    llm_judge:
-      "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-400",
-    tool_eval:
-      "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-400",
+    code: "border-hairline bg-canvas-soft text-canvas-text-soft",
+    llm_judge: "border-brand/40 bg-brand/[0.06] text-brand-soft",
+    tool_eval: "border-warn/40 bg-warn/[0.08] text-warn",
   };
   const labels: Record<EvaluatorEntry["type"], string> = {
     code: "Code",
@@ -129,10 +127,7 @@ function EvalTypeBadge({ type }: { type: EvaluatorEntry["type"] }) {
 
 function AnnotationBadge({ level }: { level: "span" | "session" }) {
   return (
-    <Badge
-      variant="outline"
-      className="text-xs font-medium border-gray-200 bg-gray-50 text-gray-600 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400"
-    >
+    <Badge variant="outline" className="text-xs font-medium border-hairline bg-canvas-soft text-mute">
       {level}
     </Badge>
   );
@@ -185,7 +180,7 @@ function ConnectionCard({ status, icon }: ConnectionCardProps) {
         <div
           className={cn(
             "text-muted-foreground",
-            status.connected ? "text-green-600" : "text-red-500"
+            status.connected ? "text-brand" : "text-fail"
           )}
         >
           {status.connected ? (
@@ -370,7 +365,7 @@ export default function SettingsPage() {
   ];
 
   return (
-    <div className="space-y-8">
+    <div className="mx-auto max-w-[1280px] px-5 py-10 lg:px-8 lg:py-14 space-y-8">
       {/* ------------------------------------------------------------------ */}
       {/* Header                                                               */}
       {/* ------------------------------------------------------------------ */}
@@ -576,8 +571,8 @@ export default function SettingsPage() {
             animate={{ opacity: 1, y: 0 }}
           >
             {seedResult.ok ? (
-              <Alert className="border-green-200 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-950 dark:text-green-200">
-                <CheckCircle2 className="h-4 w-4 text-green-600" />
+              <Alert className="border-brand/40 bg-brand/[0.06] text-brand-soft">
+                <CheckCircle2 className="h-4 w-4 text-brand" aria-hidden />
                 <AlertDescription>{seedResult.message}</AlertDescription>
               </Alert>
             ) : (

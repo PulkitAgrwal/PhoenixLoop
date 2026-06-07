@@ -154,7 +154,7 @@ export function TraceWaterfall({
                   className={cn(
                     "group relative flex cursor-pointer items-center gap-2 rounded px-2 py-1 transition-colors",
                     isSelected
-                      ? colors.bg + " ring-2 ring-offset-1 ring-inset ring-current"
+                      ? "bg-canvas-soft ring-1 ring-inset ring-brand/40"
                       : isHovered
                       ? "bg-muted/60"
                       : "hover:bg-muted/40"
@@ -225,7 +225,7 @@ export function TraceWaterfall({
                   </span>
                 </motion.div>
               </TooltipTrigger>
-              <TooltipContent side="right" className="max-w-xs">
+              <TooltipContent side="top" className="max-w-xs">
                 <div className="space-y-1">
                   <p className="font-semibold text-xs font-mono">
                     {tc.tool_name}

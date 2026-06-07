@@ -13,12 +13,70 @@ async function fetchApi<T>(
   return res.json();
 }
 
+export type StreamEvent =
+  | { type: "agent_start"; agent_run_id: string; session_id: string }
+  | { type: "tool_call_started"; index: number; tool_name: string; input: Record<string, unknown> }
+  | {
+      type: "tool_call_completed";
+      index: number;
+      tool_name: string;
+      output: Record<string, unknown>;
+      status: string;
+      latency_ms: number | null;
+    }
+  | { type: "text_chunk"; text: string }
+  | { type: "agent_done"; agent_run: Record<string, unknown> }
+  | { type: "eval_result"; result: Record<string, unknown> }
+  | { type: "done"; triggers_created: number }
+  | { type: "error"; error: string };
+
+export async function runTicketStream(
+  ticketId: string,
+  onEvent: (event: StreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${API_URL}/api/tickets/${ticketId}/run/stream`, {
+    method: "POST",
+    headers: { Accept: "text/event-stream" },
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    throw new Error(`stream failed: HTTP ${res.status}`);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // SSE frames are separated by a blank line. Within a frame, one or
+    // more lines may start with "data: ".
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) {
+      for (const line of frame.split("\n")) {
+        if (line.startsWith("data: ")) {
+          const json = line.slice(6);
+          try {
+            onEvent(JSON.parse(json) as StreamEvent);
+          } catch {
+            // ignore malformed frames
+          }
+        }
+      }
+    }
+  }
+}
+
 export const api = {
   tickets: {
     list: () => fetchApi("/api/tickets"),
     get: (id: string) => fetchApi(`/api/tickets/${id}`),
     run: (ticketId: string) =>
       fetchApi(`/api/tickets/${ticketId}/run`, { method: "POST" }),
+    runStream: runTicketStream,
   },
   conversations: {
     list: () => fetchApi("/api/conversations"),
@@ -73,6 +131,7 @@ export const api = {
   demo: {
     seed: () => fetchApi("/api/demo/seed", { method: "POST" }),
     runAll: () => fetchApi("/api/demo/run-all", { method: "POST" }),
+    fullLoop: () => fetchApi("/api/demo/full-loop", { method: "POST" }),
   },
   activity: {
     list: (limit = 5) => fetchApi(`/api/activity?limit=${limit}`),
@@ -82,6 +141,15 @@ export const api = {
   },
   health: {
     check: () => fetchApi("/api/health"),
+  },
+  stats: {
+    get: () =>
+      fetchApi<{
+        agent_runs_traced: number;
+        evaluators_wired: number;
+        mcp_tool_calls_per_run_avg: number;
+        prompts_auto_promoted: number;
+      }>("/api/stats"),
   },
   prompts: {
     list: () => fetchApi("/api/prompts"),

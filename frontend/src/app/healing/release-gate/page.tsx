@@ -14,6 +14,7 @@ import {
 import { StatCard } from "@/components/shared/stat-card";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { PhoenixDeepLink } from "@/components/shared/phoenix-deep-link";
 import { ScoreGauge } from "@/components/release-gate/score-gauge";
 import { GateChecklist } from "@/components/release-gate/gate-checklist";
 import { ApprovalCard } from "@/components/release-gate/approval-card";
@@ -21,6 +22,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Eyebrow } from "@/components/ui/eyebrow";
+import { CodeInline } from "@/components/ui/code-inline";
 import {
   Table,
   TableBody,
@@ -114,6 +117,12 @@ function DecisionDetail({ decision, onRefresh }: DecisionDetailProps) {
           <p className="text-xs text-muted-foreground">
             Experiment: {shortId(decision.experiment_id)}
           </p>
+          <div className="pt-1">
+            <PhoenixDeepLink
+              experimentId={decision.experiment_id}
+              label="View experiment in Phoenix"
+            />
+          </div>
         </div>
         <StatusBadge
           status={decisionVariant(decision.decision)}
@@ -261,7 +270,20 @@ export default function ReleaseGatePage() {
   const promoted = decisions.filter((d) => d.decision === "promoted").length;
 
   return (
-    <div className="space-y-6">
+    <div className="mx-auto max-w-[1280px] px-5 py-10 lg:px-8 lg:py-14">
+      <header className="flex flex-col gap-3">
+        <Eyebrow tone="brand">Healing · Release gate</Eyebrow>
+        <h1 className="text-display-lg text-ink-strong">
+          One verdict per experiment. Six rules each.
+        </h1>
+        <p className="max-w-[68ch] text-body-md text-body">
+          The release gate scores each candidate prompt against six promotion rules and emits
+          a single verdict — <CodeInline>PROMOTED</CodeInline>, <CodeInline>REJECTED</CodeInline>,
+          or <CodeInline>PENDING REVIEW</CodeInline>. Critical failures block automatically.
+        </p>
+      </header>
+
+      <div className="mt-8 space-y-6">
       <div className="flex justify-end">
         <Button
           variant="outline"
@@ -312,8 +334,8 @@ export default function ReleaseGatePage() {
           {loadingList ? (
             <TableSkeleton rows={4} />
           ) : listError ? (
-            <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-400">
-              <AlertCircle className="h-4 w-4 shrink-0" />
+            <div className="flex items-center gap-2 rounded-md border border-fail/40 bg-fail/[0.06] px-3 py-2 text-body-sm text-fail">
+              <AlertCircle className="h-4 w-4 shrink-0" aria-hidden />
               {listError}
             </div>
           ) : decisions.length === 0 ? (
@@ -394,12 +416,12 @@ export default function ReleaseGatePage() {
                           className={cn(
                             "font-mono text-xs",
                             d.release_score >= 0.8 &&
-                              "border-green-300 bg-green-50 text-green-700 dark:border-green-700 dark:bg-green-950 dark:text-green-400",
+                              "border-brand/40 bg-brand/[0.08] text-brand-soft",
                             d.release_score >= 0.5 &&
                               d.release_score < 0.8 &&
-                              "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-400",
+                              "border-warn/40 bg-warn/[0.08] text-warn",
                             d.release_score < 0.5 &&
-                              "border-red-300 bg-red-50 text-red-700 dark:border-red-700 dark:bg-red-950 dark:text-red-400"
+                              "border-fail/40 bg-fail/[0.08] text-fail"
                           )}
                         >
                           {(d.release_score * 100).toFixed(0)}
@@ -464,6 +486,7 @@ export default function ReleaseGatePage() {
             ) : null}
           </AnimatePresence>
         </div>
+      </div>
       </div>
     </div>
   );

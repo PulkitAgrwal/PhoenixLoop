@@ -1,40 +1,34 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import * as React from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   AlertCircle,
   ArrowRight,
-  Brain,
   FlaskConical,
   Loader2,
   RefreshCw,
   Zap,
 } from "lucide-react";
-import { StatusBadge } from "@/components/shared/status-badge";
-import { TableSkeleton } from "@/components/shared/loading-skeleton";
+
+import { Button } from "@/components/ui/button";
+import { Eyebrow } from "@/components/ui/eyebrow";
+import { Tag } from "@/components/ui/tag";
+import { CodeInline } from "@/components/ui/code-inline";
+import { StatusDot } from "@/components/ui/status-dot";
+import { PhoenixDeepLink } from "@/components/shared/phoenix-deep-link";
 import { EvidenceCard } from "@/components/improvements/evidence-card";
-import { McpQueryLog } from "@/components/improvements/mcp-query-log";
+import { DiagnosisTrace } from "@/components/improvements/diagnosis-trace";
 import { PromptDiff } from "@/components/improvements/prompt-diff";
 import { RegressionList } from "@/components/improvements/regression-list";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { Separator } from "@/components/ui/separator";
 import { api } from "@/lib/api";
-import { FailureAggregate, ImprovementTrigger, TriggerReason } from "@/lib/types";
+import type {
+  FailureAggregate,
+  ImprovementTrigger,
+  TriggerReason,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
-
-// ─── helpers ────────────────────────────────────────────────────────────────
 
 type TriggerStatus =
   | "pending"
@@ -43,145 +37,38 @@ type TriggerStatus =
   | "experiment_complete"
   | "closed";
 
-function statusVariant(
-  status: string
-): "warning" | "info" | "success" | "pending" {
-  switch (status as TriggerStatus) {
-    case "diagnosed":
-      return "info";
-    case "regressions_generated":
-      return "info";
-    case "experiment_complete":
-      return "success";
-    case "closed":
-      return "pending";
-    default:
-      return "warning";
-  }
+function statusTone(status: string): "brand" | "warn" | "mute" {
+  const s = status as TriggerStatus;
+  if (s === "experiment_complete") return "brand";
+  if (s === "closed") return "mute";
+  return "warn";
 }
 
-function triggerReasonLabel(reason: TriggerReason): string {
+function statusLabel(status: string): string {
+  return status.replace(/_/g, " ");
+}
+
+function reasonLabel(reason: TriggerReason): string {
   switch (reason) {
     case "threshold_repeated_failure":
-      return "Repeated Failure";
+      return "repeat failure";
     case "critical_failure":
-      return "Critical";
+      return "critical";
     case "manual_demo_trigger":
-      return "Manual";
+      return "manual";
   }
 }
 
-function formatDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  } catch {
-    return iso;
-  }
+function timeAgo(iso: string): string {
+  const now = Date.now();
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return iso;
+  const s = Math.max(0, Math.round((now - t) / 1000));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
 }
-
-// ─── Root Cause Card ─────────────────────────────────────────────────────────
-
-function RootCauseCard({
-  diagnosis,
-}: {
-  diagnosis: Record<string, unknown> | null;
-}) {
-  if (!diagnosis) return null;
-
-  const confidence = diagnosis["confidence"];
-  const confidenceDisplay =
-    typeof confidence === "number"
-      ? `${(confidence * 100).toFixed(0)}%`
-      : typeof confidence === "string"
-      ? confidence
-      : null;
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: "easeOut" }}
-    >
-      <Card>
-        <CardHeader className="pb-3">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <Brain className="h-4 w-4 text-muted-foreground" />
-              <CardTitle className="text-sm font-semibold">
-                Root Cause Analysis
-              </CardTitle>
-            </div>
-            {confidenceDisplay && (
-              <Badge
-                variant="outline"
-                className="text-xs border-purple-300 bg-purple-50 text-purple-700 dark:border-purple-800 dark:bg-purple-950 dark:text-purple-400"
-              >
-                {confidenceDisplay} confidence
-              </Badge>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent className="pt-0 space-y-3">
-          {diagnosis["failure_pattern"] != null && (
-            <Field
-              label="Failure Pattern"
-              value={String(diagnosis["failure_pattern"])}
-            />
-          )}
-          {diagnosis["root_cause"] != null && (
-            <Field
-              label="Root Cause"
-              value={String(diagnosis["root_cause"])}
-              highlight
-            />
-          )}
-          {diagnosis["evidence_summary"] != null && (
-            <Field
-              label="Evidence Summary"
-              value={String(diagnosis["evidence_summary"])}
-            />
-          )}
-          {diagnosis["proposed_fix"] != null && (
-            <Field
-              label="Proposed Fix"
-              value={String(diagnosis["proposed_fix"])}
-            />
-          )}
-        </CardContent>
-      </Card>
-    </motion.div>
-  );
-}
-
-function Field({
-  label,
-  value,
-  highlight = false,
-}: {
-  label: string;
-  value: string;
-  highlight?: boolean;
-}) {
-  return (
-    <div className="space-y-0.5">
-      <p className="text-xs font-medium text-muted-foreground">{label}</p>
-      <p
-        className={cn(
-          "text-sm leading-relaxed",
-          highlight ? "font-medium text-foreground" : "text-muted-foreground"
-        )}
-      >
-        {value}
-      </p>
-    </div>
-  );
-}
-
-// ─── Trigger Detail Panel ────────────────────────────────────────────────────
 
 interface TriggerDetailProps {
   trigger: ImprovementTrigger;
@@ -190,19 +77,14 @@ interface TriggerDetailProps {
 
 function TriggerDetail({ trigger, onRefresh }: TriggerDetailProps) {
   const router = useRouter();
-  const [analyzingId, setAnalyzingId] = useState<string | null>(null);
-  const [generatingId, setGeneratingId] = useState<string | null>(null);
-  const [runningId, setRunningId] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [analyzing, setAnalyzing] = React.useState(false);
+  const [generating, setGenerating] = React.useState(false);
+  const [running, setRunning] = React.useState(false);
+  const [actionError, setActionError] = React.useState<string | null>(null);
 
-  // The backend persists empty diagnosis/regression containers as ``{}`` and
-  // ``[]`` rather than null, so test for emptiness too.
   const hasDiagnosis =
     trigger.diagnosis_json != null &&
     Object.keys(trigger.diagnosis_json).length > 0;
-  // Analyze is always available — re-running overwrites the diagnosis and
-  // proposal. Useful when the prompt/data has changed since the first run.
-  const canAnalyze = true;
   const canGenerateRegressions =
     hasDiagnosis &&
     (trigger.regression_examples_json == null ||
@@ -212,190 +94,136 @@ function TriggerDetail({ trigger, onRefresh }: TriggerDetailProps) {
 
   const handleAnalyze = async () => {
     setActionError(null);
-    setAnalyzingId(trigger.improvement_trigger_id);
+    setAnalyzing(true);
     try {
-      const res = await api.improvements.analyze(
-        trigger.improvement_trigger_id
-      );
-      if (!res.ok) {
-        setActionError(res.error ?? "Analysis failed");
-      } else {
-        onRefresh();
-      }
+      const res = await api.improvements.analyze(trigger.improvement_trigger_id);
+      if (!res.ok) setActionError(res.error ?? "Analysis failed");
+      else onRefresh();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Unexpected error");
     } finally {
-      setAnalyzingId(null);
+      setAnalyzing(false);
     }
   };
 
   const handleGenerateRegressions = async () => {
     setActionError(null);
-    setGeneratingId(trigger.improvement_trigger_id);
+    setGenerating(true);
     try {
       const res = await api.improvements.generateRegressions(
         trigger.improvement_trigger_id
       );
-      if (!res.ok) {
-        setActionError(res.error ?? "Generation failed");
-      } else {
-        onRefresh();
-      }
+      if (!res.ok) setActionError(res.error ?? "Generation failed");
+      else onRefresh();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Unexpected error");
     } finally {
-      setGeneratingId(null);
+      setGenerating(false);
     }
   };
 
   const handleRunExperiment = async () => {
     setActionError(null);
-    setRunningId(trigger.improvement_trigger_id);
+    setRunning(true);
     try {
       const res = await api.experiments.run(trigger.improvement_trigger_id);
-      if (!res.ok) {
-        setActionError(res.error ?? "Experiment run failed");
-      } else {
-        router.push("/healing/experiments");
-      }
+      if (!res.ok) setActionError(res.error ?? "Experiment run failed");
+      else router.push("/healing/experiments");
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Unexpected error");
     } finally {
-      setRunningId(null);
+      setRunning(false);
     }
   };
 
   return (
-    <div className="space-y-4">
-      {/* Action bar */}
+    <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-center gap-2">
-        {canAnalyze && (
-          <Button
-            size="sm"
-            className="gap-2"
-            onClick={handleAnalyze}
-            disabled={analyzingId != null}
-          >
-            {analyzingId != null ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Brain className="h-3.5 w-3.5" />
-            )}
-            {analyzingId != null
-              ? "Analyzing…"
-              : hasDiagnosis
-                ? "Re-analyze"
-                : "Analyze"}
-          </Button>
-        )}
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={handleAnalyze}
+          disabled={analyzing}
+          aria-label={hasDiagnosis ? "Re-analyze via Phoenix MCP" : "Analyze via Phoenix MCP"}
+        >
+          {analyzing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+          {analyzing
+            ? "Diagnosing…"
+            : hasDiagnosis
+              ? "Re-diagnose via Phoenix"
+              : "Diagnose via Phoenix"}
+        </Button>
         {canGenerateRegressions && (
           <Button
             variant="outline"
             size="sm"
-            className="gap-2"
             onClick={handleGenerateRegressions}
-            disabled={generatingId != null}
+            disabled={generating}
           >
-            {generatingId != null ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Zap className="h-3.5 w-3.5" />
-            )}
-            {generatingId != null
-              ? "Generating…"
-              : "Generate Regressions"}
+            {generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
+            {generating ? "Generating…" : "Generate regressions"}
           </Button>
         )}
         {canRunExperiment && (
           <Button
             variant="outline"
             size="sm"
-            className="gap-2"
             onClick={handleRunExperiment}
-            disabled={runningId != null}
+            disabled={running}
           >
-            {runningId != null ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <FlaskConical className="h-3.5 w-3.5" />
-            )}
-            {runningId != null ? "Starting…" : "Run Experiment"}
-            {runningId == null && (
-              <ArrowRight className="h-3 w-3 ml-0.5" />
-            )}
+            {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FlaskConical className="h-3.5 w-3.5" />}
+            {running ? "Starting…" : "Run experiment"}
+            {!running && <ArrowRight className="h-3.5 w-3.5" />}
           </Button>
         )}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="gap-2 ml-auto"
-          onClick={onRefresh}
-        >
+        <Button variant="ghost" size="sm" onClick={onRefresh} className="ml-auto">
           <RefreshCw className="h-3.5 w-3.5" />
           Refresh
         </Button>
       </div>
 
-      {/* Error alert */}
       <AnimatePresence>
         {actionError && (
           <motion.div
-            initial={{ opacity: 0, y: -8 }}
+            initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-400"
+            exit={{ opacity: 0, y: -4 }}
+            className="flex items-center gap-2 rounded-md border border-fail/40 bg-fail/[0.06] px-3 py-2 text-body-sm text-fail"
+            role="alert"
           >
-            <AlertCircle className="h-4 w-4 shrink-0" />
+            <AlertCircle className="h-4 w-4 shrink-0" aria-hidden />
             {actionError}
           </motion.div>
         )}
       </AnimatePresence>
 
-      <Separator />
-
-      {/* Evidence */}
       <EvidenceCard
         exampleRunIds={trigger.example_run_ids_json ?? []}
         failureKey={trigger.failure_key}
       />
 
-      {/* MCP Query Log (diagnosis process) */}
-      <McpQueryLog diagnosis={trigger.diagnosis_json} />
+      <DiagnosisTrace diagnosis={trigger.diagnosis_json} />
 
-      {/* Root cause */}
-      {trigger.diagnosis_json && (
-        <RootCauseCard diagnosis={trigger.diagnosis_json} />
-      )}
-
-      {/* Prompt diff */}
       <PromptDiff proposal={trigger.patch_proposal_json} />
 
-      {/* Regression tests */}
-      <RegressionList
-        regressions={trigger.regression_examples_json ?? []}
-      />
+      <RegressionList regressions={trigger.regression_examples_json ?? []} />
     </div>
   );
 }
 
-// ─── Page ────────────────────────────────────────────────────────────────────
-
 export default function ImprovementsPage() {
-  const [triggers, setTriggers] = useState<ImprovementTrigger[]>([]);
-  // Keyed by failure_key — used to render live occurrence counts on each
-  // trigger card so new failing runs are visible without re-creating triggers.
-  const [failuresByKey, setFailuresByKey] = useState<
+  const [triggers, setTriggers] = React.useState<ImprovementTrigger[]>([]);
+  const [failuresByKey, setFailuresByKey] = React.useState<
     Record<string, FailureAggregate>
   >({});
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [selectedTrigger, setSelectedTrigger] =
-    useState<ImprovementTrigger | null>(null);
-  const [loadingList, setLoadingList] = useState(true);
-  const [loadingDetail, setLoadingDetail] = useState(false);
-  const [listError, setListError] = useState<string | null>(null);
+    React.useState<ImprovementTrigger | null>(null);
+  const [loadingList, setLoadingList] = React.useState(true);
+  const [loadingDetail, setLoadingDetail] = React.useState(false);
+  const [listError, setListError] = React.useState<string | null>(null);
 
-  // Load list (triggers + failure aggregates in parallel)
-  const loadList = useCallback(async () => {
+  const loadList = React.useCallback(async () => {
     setListError(null);
     setLoadingList(true);
     try {
@@ -407,11 +235,7 @@ export default function ImprovementsPage() {
         const raw = tRes.data as
           | ImprovementTrigger[]
           | { items: ImprovementTrigger[] };
-        setTriggers(
-          Array.isArray(raw)
-            ? raw
-            : (raw as { items: ImprovementTrigger[] }).items ?? [],
-        );
+        setTriggers(Array.isArray(raw) ? raw : raw.items ?? []);
       } else {
         setListError(tRes.error ?? "Failed to load improvement triggers");
       }
@@ -419,9 +243,7 @@ export default function ImprovementsPage() {
         const fraw = fRes.data as
           | FailureAggregate[]
           | { items: FailureAggregate[] };
-        const items = Array.isArray(fraw)
-          ? fraw
-          : (fraw as { items: FailureAggregate[] }).items ?? [];
+        const items = Array.isArray(fraw) ? fraw : fraw.items ?? [];
         const byKey: Record<string, FailureAggregate> = {};
         for (const f of items) byKey[f.failure_key] = f;
         setFailuresByKey(byKey);
@@ -433,30 +255,24 @@ export default function ImprovementsPage() {
     }
   }, []);
 
-  useEffect(() => {
+  React.useEffect(() => {
     loadList();
   }, [loadList]);
 
-  // Load detail when selectedId changes
-  const loadDetail = useCallback(
+  const loadDetail = React.useCallback(
     async (id: string) => {
       setLoadingDetail(true);
       try {
         const res = await api.improvements.get(id);
         if (res.ok && res.data) {
-          // GET /api/improvements/{id} wraps the trigger as
-          // { trigger, regression_examples }; unwrap to the trigger object.
           const raw = res.data as
             | ImprovementTrigger
             | { trigger: ImprovementTrigger };
           const trigger =
-            "trigger" in raw && raw.trigger
-              ? raw.trigger
-              : (raw as ImprovementTrigger);
+            "trigger" in raw && raw.trigger ? raw.trigger : (raw as ImprovementTrigger);
           setSelectedTrigger(trigger);
         }
       } catch {
-        // Silently fall back to list data
         const found = triggers.find((t) => t.improvement_trigger_id === id);
         if (found) setSelectedTrigger(found);
       } finally {
@@ -466,7 +282,14 @@ export default function ImprovementsPage() {
     [triggers]
   );
 
-  const handleSelectTrigger = (id: string) => {
+  React.useEffect(() => {
+    if (selectedId === null && triggers[0]) {
+      setSelectedId(triggers[0].improvement_trigger_id);
+      loadDetail(triggers[0].improvement_trigger_id);
+    }
+  }, [triggers, selectedId, loadDetail]);
+
+  const handleSelect = (id: string) => {
     setSelectedId(id);
     loadDetail(id);
   };
@@ -477,187 +300,164 @@ export default function ImprovementsPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-end">
-        <Button variant="outline" size="sm" onClick={handleRefresh} className="gap-2">
-          <RefreshCw className="h-3.5 w-3.5" />
-          Refresh
-        </Button>
-      </div>
+    <div className="mx-auto max-w-[1280px] px-5 py-10 lg:px-8 lg:py-14">
+      <header className="flex flex-col gap-3">
+        <Eyebrow tone="brand">Healing · Improvements</Eyebrow>
+        <h1 className="text-display-lg text-ink-strong">
+          One trigger. One diagnosis. One patch.
+        </h1>
+        <p className="max-w-[68ch] text-body-md text-body">
+          The diagnosis sub-agent calls Phoenix MCP — <CodeInline>get-spans</CodeInline> and{" "}
+          <CodeInline>get-span-annotations</CodeInline> — to read its own failing runs back
+          and propose the smallest prompt edit that would close the cluster.
+        </p>
+      </header>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[380px_1fr]">
-        {/* ── Left: Triggers List ── */}
-        <div className="flex flex-col gap-3">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Triggers
-          </h2>
+      <section
+        className="mt-8 grid grid-cols-1 gap-px overflow-hidden rounded-md border border-hairline bg-hairline lg:grid-cols-[400px,1fr]"
+        aria-label="Improvement triggers"
+      >
+        <div className="bg-canvas">
+          <div className="flex items-center justify-between border-b border-hairline bg-canvas-soft px-4 py-2.5">
+            <Eyebrow tone="mute">Triggers</Eyebrow>
+            <Button variant="ghost" size="sm" onClick={handleRefresh}>
+              <RefreshCw className="h-3.5 w-3.5" />
+              Refresh
+            </Button>
+          </div>
 
           {loadingList ? (
-            <TableSkeleton rows={4} />
+            <div className="flex flex-col gap-px bg-hairline">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="h-20 bg-canvas animate-pulse" />
+              ))}
+            </div>
           ) : listError ? (
-            <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-400">
-              <AlertCircle className="h-4 w-4 shrink-0" />
+            <div className="m-4 rounded-md border border-fail/40 bg-fail/[0.06] px-4 py-3 text-body-sm text-fail">
+              <AlertCircle className="inline h-4 w-4 mr-2 align-text-bottom" aria-hidden />
               {listError}
             </div>
           ) : triggers.length === 0 ? (
-            <motion.div
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="rounded-lg border border-dashed border-border p-6 text-center"
-            >
-              <p className="text-sm text-muted-foreground">
-                No improvement triggers yet.
+            <div className="flex flex-col items-center gap-3 px-6 py-12 text-center">
+              <p className="text-body-sm text-body max-w-[40ch]">
+                No improvement triggers yet. The seed produces one on first boot.
               </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Failures crossing threshold will appear here.{" "}
-                <a
-                  href="/activity/failures"
-                  className="text-primary underline-offset-4 hover:underline"
-                >
+              <Button variant="outline" size="sm" asChild>
+                <a href="/activity/failures">
                   View failures
+                  <ArrowRight className="h-3.5 w-3.5" />
                 </a>
-              </p>
-            </motion.div>
+              </Button>
+            </div>
           ) : (
-            <div className="rounded-lg border border-border overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-muted/40">
-                    <TableHead className="text-xs">Failure Key</TableHead>
-                    <TableHead className="text-xs">Reason</TableHead>
-                    <TableHead className="text-xs text-right">#</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {triggers.map((t, idx) => (
-                    <motion.tr
-                      key={t.improvement_trigger_id}
-                      initial={{ opacity: 0, x: -8 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ duration: 0.2, delay: idx * 0.04 }}
-                      onClick={() =>
-                        handleSelectTrigger(t.improvement_trigger_id)
-                      }
+            <ul role="list" className="divide-y divide-hairline">
+              {triggers.map((t) => {
+                const isSelected = t.improvement_trigger_id === selectedId;
+                const live = failuresByKey[t.failure_key];
+                const liveCount = live?.occurrence_count ?? t.occurrence_count;
+                const delta = liveCount - t.occurrence_count;
+                return (
+                  <li key={t.improvement_trigger_id}>
+                    <button
+                      type="button"
+                      onClick={() => handleSelect(t.improvement_trigger_id)}
+                      aria-pressed={isSelected}
                       className={cn(
-                        "cursor-pointer border-b border-border transition-colors",
-                        "hover:bg-muted/50",
-                        selectedId === t.improvement_trigger_id &&
-                          "bg-primary/5 hover:bg-primary/5"
+                        "flex w-full flex-col gap-1.5 px-4 py-3 text-left transition-colors",
+                        isSelected
+                          ? "bg-canvas-soft border-l-2 border-l-brand"
+                          : "border-l-2 border-l-transparent hover:bg-canvas-soft"
                       )}
                     >
-                      <TableCell className="py-3">
-                        <div className="space-y-1">
-                          <p className="text-xs font-mono truncate max-w-[160px]">
-                            {t.failure_key}
-                          </p>
-                          <StatusBadge
-                            status={statusVariant(t.status)}
-                            label={t.status.replace(/_/g, " ")}
-                          />
-                        </div>
-                      </TableCell>
-                      <TableCell className="py-3">
-                        <span className="text-xs text-muted-foreground">
-                          {triggerReasonLabel(t.trigger_reason)}
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-code text-canvas-text-soft truncate">
+                          {t.failure_key}
                         </span>
-                        <p className="text-xs text-muted-foreground/60 mt-0.5">
-                          {formatDate(t.created_at)}
-                        </p>
-                      </TableCell>
-                      <TableCell className="py-3 text-right">
-                        {(() => {
-                          const live = failuresByKey[t.failure_key];
-                          const liveCount =
-                            live?.occurrence_count ?? t.occurrence_count;
-                          const delta = liveCount - t.occurrence_count;
-                          return (
-                            <div className="flex flex-col items-end gap-0.5">
-                              <Badge variant="secondary" className="text-xs">
-                                {liveCount}
-                              </Badge>
-                              {delta > 0 && (
-                                <span
-                                  className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400"
-                                  title={`+${delta} new occurrence${delta === 1 ? "" : "s"} since trigger created`}
-                                >
-                                  +{delta} new
-                                </span>
-                              )}
-                            </div>
-                          );
-                        })()}
-                      </TableCell>
-                    </motion.tr>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+                        <span className="ml-auto inline-flex items-center gap-1.5 text-caption uppercase tracking-eyebrow">
+                          <StatusDot tone={statusTone(t.status)} size="xs" />
+                          <span
+                            className={cn(
+                              statusTone(t.status) === "brand" && "text-brand-soft",
+                              statusTone(t.status) === "warn" && "text-warn",
+                              statusTone(t.status) === "mute" && "text-mute"
+                            )}
+                          >
+                            {statusLabel(t.status)}
+                          </span>
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 text-caption text-mute">
+                        <span>{reasonLabel(t.trigger_reason)}</span>
+                        <span>·</span>
+                        <span>{timeAgo(t.created_at)}</span>
+                        <span className="ml-auto inline-flex items-center gap-1.5">
+                          <span className="num-mono text-ink">{liveCount}</span>
+                          <span className="text-mute">×</span>
+                          {delta > 0 && <Tag tone="brand">+{delta} new</Tag>}
+                        </span>
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
           )}
         </div>
 
-        {/* ── Right: Detail Panel ── */}
-        <div>
-          <AnimatePresence mode="wait">
-            {!selectedId ? (
-              <motion.div
-                key="empty"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="flex h-full min-h-[320px] items-center justify-center rounded-lg border border-dashed border-border"
-              >
-                <div className="text-center space-y-2">
-                  <Brain className="mx-auto h-8 w-8 text-muted-foreground/40" />
-                  <p className="text-sm font-medium text-muted-foreground">
-                    Select a trigger to view details
-                  </p>
-                </div>
-              </motion.div>
-            ) : loadingDetail ? (
-              <motion.div
-                key="loading"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="space-y-4"
-              >
-                {[1, 2, 3].map((i) => (
-                  <div key={i} className="h-32 rounded-lg border border-border bg-muted/30 animate-pulse" />
-                ))}
-              </motion.div>
-            ) : selectedTrigger ? (
-              <motion.div
-                key={selectedTrigger.improvement_trigger_id}
-                initial={{ opacity: 0, x: 16 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -16 }}
-                transition={{ duration: 0.25, ease: "easeOut" }}
-              >
-                {/* Detail header */}
-                <div className="mb-4 flex items-center justify-between gap-3 flex-wrap">
-                  <div className="space-y-1">
-                    <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                      Detail
-                    </h2>
-                    <p className="text-sm font-mono text-foreground">
-                      {selectedTrigger.failure_key}
-                    </p>
-                  </div>
-                  <StatusBadge
-                    status={statusVariant(selectedTrigger.status)}
-                    label={selectedTrigger.status.replace(/_/g, " ")}
-                  />
-                </div>
-
-                <TriggerDetail
-                  trigger={selectedTrigger}
-                  onRefresh={handleRefresh}
+        {/* Detail */}
+        <div className="bg-canvas px-5 py-5 lg:px-7 lg:py-7">
+          {!selectedId ? (
+            <div className="flex h-full items-center justify-center min-h-[320px]">
+              <p className="text-body-sm text-mute">Select a trigger to inspect.</p>
+            </div>
+          ) : loadingDetail ? (
+            <div className="flex flex-col gap-4">
+              {[1, 2, 3].map((i) => (
+                <div
+                  key={i}
+                  className="h-28 rounded-md border border-hairline bg-canvas-soft animate-pulse"
                 />
-              </motion.div>
-            ) : null}
-          </AnimatePresence>
+              ))}
+            </div>
+          ) : selectedTrigger ? (
+            <motion.div
+              key={selectedTrigger.improvement_trigger_id}
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.18 }}
+            >
+              <div className="mb-5 flex flex-wrap items-end justify-between gap-2 border-b border-hairline pb-4">
+                <div>
+                  <Eyebrow tone="mute">Selected trigger</Eyebrow>
+                  <p className="mt-1 font-mono text-display-sm text-canvas-text-soft">
+                    {selectedTrigger.failure_key}
+                  </p>
+                  <div className="mt-1.5">
+                    <PhoenixDeepLink
+                      projectName="phoenixloop"
+                      label="View failing runs in Phoenix"
+                    />
+                  </div>
+                </div>
+                <span className="inline-flex items-center gap-1.5 text-caption uppercase tracking-eyebrow">
+                  <StatusDot tone={statusTone(selectedTrigger.status)} size="xs" />
+                  <span
+                    className={cn(
+                      statusTone(selectedTrigger.status) === "brand" && "text-brand-soft",
+                      statusTone(selectedTrigger.status) === "warn" && "text-warn",
+                      statusTone(selectedTrigger.status) === "mute" && "text-mute"
+                    )}
+                  >
+                    {statusLabel(selectedTrigger.status)}
+                  </span>
+                </span>
+              </div>
+
+              <TriggerDetail trigger={selectedTrigger} onRefresh={handleRefresh} />
+            </motion.div>
+          ) : null}
         </div>
-      </div>
+      </section>
     </div>
   );
 }

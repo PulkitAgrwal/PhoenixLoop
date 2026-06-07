@@ -33,14 +33,14 @@ const CATEGORY_LABELS: Record<TicketCategory, string> = {
 };
 
 const CATEGORY_COLORS: Record<TicketCategory, string> = {
-  refund: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
-  billing: "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300",
-  admin_access: "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300",
-  data_export: "bg-teal-100 text-teal-700 dark:bg-teal-950 dark:text-teal-300",
-  privacy: "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",
-  legal: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
-  outage_credit: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
-  ambiguous: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
+  refund: "border-brand/40 text-brand-soft",
+  billing: "border-hairline text-ink",
+  admin_access: "border-warn/40 text-warn",
+  data_export: "border-hairline text-body",
+  privacy: "border-hairline text-body",
+  legal: "border-fail/40 text-fail",
+  outage_credit: "border-warn/40 text-warn",
+  ambiguous: "border-hairline text-mute",
 };
 
 export function ScenarioSelector({ onSelect, disabled }: ScenarioSelectorProps) {

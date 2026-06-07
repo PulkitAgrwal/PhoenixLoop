@@ -125,7 +125,7 @@ export default function PromptsPage() {
     ) ?? null;
 
   return (
-    <div className="space-y-6">
+    <div className="mx-auto max-w-[1280px] px-5 py-10 lg:px-8 lg:py-14 space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold flex items-center gap-2">

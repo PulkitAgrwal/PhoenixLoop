@@ -67,10 +67,8 @@ export function SpanDetail({ toolCall, evalResults = [] }: SpanDetailProps) {
       <CardContent className="pt-4 space-y-4">
         {/* Input */}
         <div>
-          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Input
-          </p>
-          <pre className="overflow-x-auto rounded-md bg-muted px-3 py-2.5 text-xs leading-relaxed max-h-48">
+          <p className="mb-1 text-eyebrow-mono uppercase text-mute">Input</p>
+          <pre className="overflow-x-auto rounded-sm bg-canvas-soft px-3 py-2 font-mono text-code text-canvas-text-soft max-h-48">
             <code>{JSON.stringify(toolCall.input, null, 2)}</code>
           </pre>
         </div>
@@ -79,16 +77,8 @@ export function SpanDetail({ toolCall, evalResults = [] }: SpanDetailProps) {
 
         {/* Output */}
         <div>
-          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Output
-          </p>
-          <pre
-            className={
-              toolCall.status === "success" || toolCall.status === "ok"
-                ? "overflow-x-auto rounded-md bg-green-50 dark:bg-green-950/30 px-3 py-2.5 text-xs leading-relaxed max-h-48"
-                : "overflow-x-auto rounded-md bg-red-50 dark:bg-red-950/30 px-3 py-2.5 text-xs leading-relaxed max-h-48"
-            }
-          >
+          <p className="mb-1 text-eyebrow-mono uppercase text-mute">Output</p>
+          <pre className="overflow-x-auto rounded-sm bg-canvas-soft px-3 py-2 font-mono text-code text-canvas-text-soft max-h-48">
             <code>{JSON.stringify(toolCall.output, null, 2)}</code>
           </pre>
         </div>

@@ -1,159 +1,143 @@
 "use client";
 
-import React from "react";
-import { motion } from "framer-motion";
-import { GitCompare } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import * as React from "react";
+import { diffLines, type Change } from "diff";
+
+import { Eyebrow } from "@/components/ui/eyebrow";
+import { Tag } from "@/components/ui/tag";
 import { cn } from "@/lib/utils";
 
 interface PromptDiffProps {
   proposal: Record<string, unknown> | null;
 }
 
-function splitLines(text: string): string[] {
-  return text.split("\n");
+interface DiffRow {
+  kind: "context" | "added" | "removed";
+  text: string;
 }
 
-function DiffPanel({
-  title,
-  lines,
-  variant,
-}: {
-  title: string;
-  lines: string[];
-  variant: "removed" | "added";
-}) {
-  const lineNumberColor =
-    variant === "removed" ? "text-red-400/60" : "text-green-400/60";
-  const lineColor =
-    variant === "removed" ? "text-red-300" : "text-green-300";
-  const bgStripe =
-    variant === "removed"
-      ? "bg-red-950/40 border-l-2 border-red-700"
-      : "bg-green-950/40 border-l-2 border-green-700";
-  const headerColor =
-    variant === "removed" ? "text-red-400" : "text-green-400";
-
-  return (
-    <div className="flex-1 min-w-0">
-      <div
-        className={cn(
-          "text-xs font-mono px-3 py-1.5 border-b border-border bg-gray-900/60",
-          headerColor
-        )}
-      >
-        {title}
-      </div>
-      <ScrollArea className="h-48">
-        <div className="bg-gray-950 p-3 font-mono text-xs leading-5">
-          {lines.map((line, idx) => (
-            <div key={idx} className={cn("flex gap-2 px-1 rounded", bgStripe)}>
-              <span
-                className={cn(
-                  "select-none shrink-0 w-8 text-right",
-                  lineNumberColor
-                )}
-              >
-                {idx + 1}
-              </span>
-              <span className={cn("whitespace-pre-wrap break-all", lineColor)}>
-                {line || " "}
-              </span>
-            </div>
-          ))}
-        </div>
-      </ScrollArea>
-    </div>
-  );
+function buildRows(original: string, proposed: string): DiffRow[] {
+  if (!original && !proposed) return [];
+  const parts: Change[] = diffLines(original, proposed);
+  const rows: DiffRow[] = [];
+  for (const part of parts) {
+    const lines = part.value.replace(/\n$/, "").split("\n");
+    for (const line of lines) {
+      rows.push({
+        kind: part.added ? "added" : part.removed ? "removed" : "context",
+        text: line,
+      });
+    }
+  }
+  return rows;
 }
 
 export function PromptDiff({ proposal }: PromptDiffProps) {
-  if (!proposal) {
-    return (
-      <Card>
-        <CardHeader className="pb-3">
-          <div className="flex items-center gap-2">
-            <GitCompare className="h-4 w-4 text-muted-foreground" />
-            <CardTitle className="text-sm font-semibold">Prompt Diff</CardTitle>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">
-            No proposal generated yet.
-          </p>
-        </CardContent>
-      </Card>
-    );
-  }
-
   const originalText =
-    typeof proposal["original_text"] === "string"
+    proposal && typeof proposal["original_text"] === "string"
       ? proposal["original_text"]
       : "";
   const proposedText =
-    typeof proposal["proposed_text"] === "string"
+    proposal && typeof proposal["proposed_text"] === "string"
       ? proposal["proposed_text"]
       : "";
   const patchType =
-    typeof proposal["patch_type"] === "string" ? proposal["patch_type"] : null;
+    proposal && typeof proposal["patch_type"] === "string"
+      ? proposal["patch_type"]
+      : null;
   const rationale =
-    typeof proposal["rationale"] === "string" ? proposal["rationale"] : null;
+    proposal && typeof proposal["rationale"] === "string"
+      ? proposal["rationale"]
+      : null;
 
-  const originalLines = splitLines(originalText);
-  const proposedLines = splitLines(proposedText);
+  const rows = React.useMemo(
+    () => buildRows(originalText, proposedText),
+    [originalText, proposedText]
+  );
+  const addedCount = rows.filter((r) => r.kind === "added").length;
+  const removedCount = rows.filter((r) => r.kind === "removed").length;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: "easeOut" }}
+    <section
+      aria-label="Prompt diff"
+      className="rounded-md border border-hairline bg-canvas overflow-hidden"
     >
-      <Card className="overflow-hidden">
-        <CardHeader className="pb-3">
-          <div className="flex items-start justify-between gap-3 flex-wrap">
-            <div className="flex items-center gap-2">
-              <GitCompare className="h-4 w-4 text-muted-foreground" />
-              <CardTitle className="text-sm font-semibold">
-                Prompt Diff
-              </CardTitle>
-              {patchType && (
-                <Badge variant="secondary" className="text-xs capitalize">
-                  {patchType.replace(/_/g, " ")}
-                </Badge>
-              )}
-            </div>
-          </div>
+      <header className="flex items-center justify-between border-b border-hairline bg-canvas-soft px-4 py-2.5">
+        <div className="flex items-center gap-3">
+          <Eyebrow tone="brand">Prompt diff</Eyebrow>
+          {patchType && (
+            <span className="font-mono text-caption text-mute">
+              {patchType.replace(/_/g, " ")}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <Tag tone="brand">+ {addedCount}</Tag>
+          <Tag tone="mute">− {removedCount}</Tag>
+        </div>
+      </header>
+
+      {!proposal ? (
+        <p className="px-4 py-4 text-body-sm text-mute">
+          No proposal yet. Click <span className="text-ink">Analyze</span> to invoke the diagnosis
+          sub-agent and synthesize a one-line prompt patch.
+        </p>
+      ) : rows.length === 0 ? (
+        <p className="px-4 py-4 text-body-sm text-mute">
+          Proposal data is incomplete — missing original or proposed text.
+        </p>
+      ) : (
+        <>
           {rationale && (
-            <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+            <p className="border-b border-hairline px-4 py-3 text-body-sm text-body">
               {rationale}
             </p>
           )}
-        </CardHeader>
-        <CardContent className="pt-0 px-0 pb-0">
-          {originalText || proposedText ? (
-            <div className="flex border-t border-border divide-x divide-border rounded-b-lg overflow-hidden">
-              <DiffPanel
-                title="Original"
-                lines={originalLines}
-                variant="removed"
-              />
-              <DiffPanel
-                title="Proposed"
-                lines={proposedLines}
-                variant="added"
-              />
-            </div>
-          ) : (
-            <div className="px-4 pb-4">
-              <p className="text-sm text-muted-foreground">
-                Proposal data is incomplete — missing original or proposed text.
-              </p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    </motion.div>
+          <pre className="overflow-x-auto bg-canvas-soft px-4 py-3 font-mono text-code leading-[18px]">
+            <code>
+              {rows.map((r, i) => (
+                <div
+                  key={i}
+                  className={cn(
+                    "flex items-baseline gap-3 px-1 py-[1px]",
+                    r.kind === "added" && "bg-brand/[0.08]",
+                    r.kind === "removed" && "bg-canvas"
+                  )}
+                >
+                  <span className="num-mono w-8 select-none text-right text-mute opacity-60">
+                    {i + 1}
+                  </span>
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "w-3 shrink-0",
+                      r.kind === "added"
+                        ? "text-brand"
+                        : r.kind === "removed"
+                          ? "text-mute"
+                          : "text-mute opacity-40"
+                    )}
+                  >
+                    {r.kind === "added" ? "+" : r.kind === "removed" ? "−" : " "}
+                  </span>
+                  <span
+                    className={cn(
+                      "whitespace-pre-wrap break-words",
+                      r.kind === "added"
+                        ? "text-brand-soft"
+                        : r.kind === "removed"
+                          ? "text-mute line-through decoration-mute/60"
+                          : "text-canvas-text-soft"
+                    )}
+                  >
+                    {r.text || " "}
+                  </span>
+                </div>
+              ))}
+            </code>
+          </pre>
+        </>
+      )}
+    </section>
   );
 }

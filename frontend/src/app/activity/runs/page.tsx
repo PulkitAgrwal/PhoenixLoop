@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { Suspense, useEffect, useState, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import {
@@ -21,6 +21,7 @@ import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { TraceWaterfall } from "@/components/traces/trace-waterfall";
 import { SpanDetail } from "@/components/traces/span-detail";
 import { EvalBadge } from "@/components/traces/eval-badge";
+import { Eyebrow } from "@/components/ui/eyebrow";
 
 import {
   Card,
@@ -121,13 +122,13 @@ function SessionSummary({
       <StatCard
         title="Passed"
         value={pass}
-        icon={<CheckCircle2 className="h-4 w-4 text-green-500" />}
+        icon={<CheckCircle2 className="h-4 w-4 text-brand" />}
         description={`${passRate.toFixed(0)}% pass rate`}
       />
       <StatCard
         title="Failed"
         value={fail}
-        icon={<XCircle className="h-4 w-4 text-red-500" />}
+        icon={<XCircle className="h-4 w-4 text-fail" />}
         description={fail > 0 ? "needs attention" : "all clear"}
       />
       <StatCard
@@ -324,7 +325,7 @@ function RunDetailPanel({
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
-export default function TracesPage() {
+function TracesPageInner() {
   const [loading, setLoading] = useState(true);
   const [runRows, setRunRows] = useState<RunRow[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -457,30 +458,43 @@ export default function TracesPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-end">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={loadData}
-          disabled={loading}
-        >
-          <RefreshCw
-            className={cn("h-4 w-4 mr-1.5", loading && "animate-spin")}
-          />
-          Refresh
-        </Button>
-      </div>
+    <div className="mx-auto max-w-[1280px] px-5 py-10 lg:px-8 lg:py-14">
+      <header className="flex flex-col gap-3">
+        <Eyebrow tone="brand">Activity · Runs</Eyebrow>
+        <h1 className="text-display-lg text-ink-strong">
+          Every agent run, span by span.
+        </h1>
+        <p className="max-w-[68ch] text-body-md text-body">
+          Each row is one ADK <code className="font-mono text-canvas-text-soft">agent_run</code>{" "}
+          captured by Phoenix. Expand to see the trace waterfall, span-level inputs and outputs,
+          and the eval results grouped by evaluator type.
+        </p>
+      </header>
 
-      {/* Error state */}
-      {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-400">
-          {error}
+      <div className="mt-8 space-y-6">
+        <div className="flex justify-end">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={loadData}
+            disabled={loading}
+          >
+            <RefreshCw
+              className={cn("h-4 w-4 mr-1.5", loading && "animate-spin")}
+            />
+            Refresh
+          </Button>
         </div>
-      )}
 
-      {/* Agent Runs Table */}
-      <Card>
+        {/* Error state */}
+        {error && (
+          <div className="rounded-md border border-fail/40 bg-fail/[0.06] px-4 py-3 text-body-sm text-fail">
+            {error}
+          </div>
+        )}
+
+        {/* Agent Runs Table */}
+        <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">Agent Runs</CardTitle>
           <CardDescription className="text-xs">
@@ -579,12 +593,12 @@ export default function TracesPage() {
                               </span>
                             ) : (
                               <div className="flex items-center gap-1.5">
-                                <span className="flex items-center gap-0.5 text-xs text-green-600 font-medium">
-                                  <CheckCircle2 className="h-3 w-3" />
+                                <span className="flex items-center gap-0.5 text-caption text-brand-soft font-medium">
+                                  <CheckCircle2 className="h-3 w-3" aria-hidden />
                                   {pass}
                                 </span>
-                                <span className="flex items-center gap-0.5 text-xs text-red-600 font-medium">
-                                  <XCircle className="h-3 w-3" />
+                                <span className="flex items-center gap-0.5 text-caption text-fail font-medium">
+                                  <XCircle className="h-3 w-3" aria-hidden />
                                   {fail}
                                 </span>
                               </div>
@@ -625,6 +639,15 @@ export default function TracesPage() {
           )}
         </CardContent>
       </Card>
+      </div>
     </div>
+  );
+}
+
+export default function TracesPage() {
+  return (
+    <Suspense fallback={null}>
+      <TracesPageInner />
+    </Suspense>
   );
 }

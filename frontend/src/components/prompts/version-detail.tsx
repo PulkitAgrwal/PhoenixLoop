@@ -11,6 +11,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Pencil, FlaskConical } from "lucide-react";
 import { PromptVersion } from "@/lib/types";
+import { PhoenixDeepLink } from "@/components/shared/phoenix-deep-link";
 
 interface Props {
   version: PromptVersion;
@@ -45,6 +46,7 @@ export function VersionDetail({
                     ACTIVE
                   </Badge>
                 )}
+                <PhoenixDeepLink promptId={version.prompt_version_id} />
               </CardTitle>
               <div className="text-xs text-muted-foreground mt-1 space-y-0.5">
                 <div>
