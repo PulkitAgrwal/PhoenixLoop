@@ -11,6 +11,11 @@ services:
     volumes:
       - db-data:/app/db
       - ./data:/data:ro
+      # Fixture data for LIGHTWEIGHT_DEMO=true autoseed. Tests/ isn't in the
+      # image but the seed loader resolves fixtures relative to backend/src
+      # → ../../tests/fixtures/seed/. Mounting tests in read-only keeps prod
+      # images slim while still enabling fixture mode for demos/tests.
+      - ./backend/tests:/app/tests:ro
       # Application Default Credentials for Vertex AI. Read-only.
       # Only used when GOOGLE_GENAI_USE_VERTEXAI=true; otherwise ignored.
       - ${HOME}/.config/gcloud:/root/.config/gcloud:ro

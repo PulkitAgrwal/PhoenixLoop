@@ -1,11 +1,9 @@
 "use client";
 
 import React, { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   AlertCircle,
-  ArrowRight,
   CheckSquare,
   Gauge,
   RefreshCw,
@@ -15,6 +13,7 @@ import { StatCard } from "@/components/shared/stat-card";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { PhoenixDeepLink } from "@/components/shared/phoenix-deep-link";
+import { EmptyState } from "@/components/shared/empty-state";
 import { ScoreGauge } from "@/components/release-gate/score-gauge";
 import { GateChecklist } from "@/components/release-gate/gate-checklist";
 import { ApprovalCard } from "@/components/release-gate/approval-card";
@@ -182,8 +181,6 @@ function DecisionDetail({ decision, onRefresh }: DecisionDetailProps) {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ReleaseGatePage() {
-  const router = useRouter();
-
   const [decisions, setDecisions] = useState<ReleaseGateDecision[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedDecision, setSelectedDecision] =
@@ -339,28 +336,10 @@ export default function ReleaseGatePage() {
               {listError}
             </div>
           ) : decisions.length === 0 ? (
-            <motion.div
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="rounded-lg border border-dashed border-border p-8 text-center space-y-3"
-            >
-              <ShieldCheck className="mx-auto h-8 w-8 text-muted-foreground/40" />
-              <p className="text-sm text-muted-foreground">
-                No release decisions yet.
-              </p>
-              <p className="text-xs text-muted-foreground">
-                Run an experiment first to generate a release gate evaluation.
-              </p>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => router.push("/healing/experiments")}
-                className="gap-1.5"
-              >
-                Go to Experiments
-                <ArrowRight className="h-3.5 w-3.5" />
-              </Button>
-            </motion.div>
+            <EmptyState
+              title="No release gate outcomes yet"
+              description="Promotion decisions appear here after experiments complete. Run seed."
+            />
           ) : (
             <div className="rounded-lg border border-border overflow-hidden">
               <Table>

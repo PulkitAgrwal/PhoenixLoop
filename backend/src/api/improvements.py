@@ -162,11 +162,20 @@ async def analyze_improvement(
         )
 
     mcp_toolset = getattr(request.app.state, "phoenix_mcp_toolset", None)
+    diagnosis_mcp_toolset = getattr(request.app.state, "diagnosis_mcp_toolset", None)
     current_prompt_text, _ = await get_production_prompt(db)
+
+    from src.db import resolve_trace_ids
+    example_trace_ids = await resolve_trace_ids(db, trigger.example_run_ids_json)
 
     diagnosis: dict
     if mcp_toolset is not None:
-        diagnosis = await run_diagnosis_agent(trigger, mcp_toolset)
+        diagnosis = await run_diagnosis_agent(
+            trigger,
+            diagnosis_mcp_toolset or mcp_toolset,
+            phoenixloop_cycle_id=trigger.improvement_trigger_id,
+            example_trace_ids=example_trace_ids,
+        )
         # ``mcp_status == "agent_fallback"`` means the agent path ran but
         # didn't produce usable structured output — drop to the legacy
         # path so the endpoint still returns something credible.

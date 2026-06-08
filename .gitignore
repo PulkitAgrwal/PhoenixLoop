@@ -9,8 +9,8 @@
 # Claude Code
 .claude/
 
-# Superpowers plans & docs
-docs/
+# Superpowers plans & docs (architecture.png is intentionally tracked)
+docs/superpowers/
 
 # Python
 backend/.venv/
@@ -24,6 +24,7 @@ build/
 node_modules/
 frontend/.next/
 frontend/out/
+frontend/tsconfig.tsbuildinfo
 
 # Database
 *.db
@@ -39,3 +40,7 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Local-only tooling (not shipped publicly)
+hackathon-audit/
+scripts/record_demo/

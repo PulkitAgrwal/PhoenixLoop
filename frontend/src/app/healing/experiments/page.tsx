@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { AlertCircle, ArrowRight, RefreshCw } from "lucide-react";
@@ -11,6 +10,7 @@ import { Eyebrow } from "@/components/ui/eyebrow";
 import { Tag } from "@/components/ui/tag";
 import { StatusDot } from "@/components/ui/status-dot";
 import { CodeInline } from "@/components/ui/code-inline";
+import { EmptyState } from "@/components/shared/empty-state";
 import { PhoenixDeepLink } from "@/components/shared/phoenix-deep-link";
 import { ScoreComparison } from "@/components/experiments/score-comparison";
 import { PromptChangesSection } from "@/components/experiments/prompt-changes-section";
@@ -38,7 +38,7 @@ const VERDICT_TONE: Record<ReleaseDecision, "brand" | "warn" | "mute" | "fail"> 
 };
 
 const VERDICT_LABEL: Record<ReleaseDecision, string> = {
-  promoted: "PROMOTED",
+  promoted: "PROMOTED ✓ live",
   rejected: "REJECTED",
   pending_human_review: "PENDING REVIEW",
   blocked_critical_failure: "BLOCKED",
@@ -173,15 +173,10 @@ export default function ExperimentsPage() {
               {listError}
             </div>
           ) : experiments.length === 0 ? (
-            <div className="flex flex-col items-center gap-3 px-6 py-12 text-center">
-              <p className="text-body-sm text-body max-w-[40ch]">
-                No experiments yet. Create one from the{" "}
-                <Link href="/healing/improvements" className="text-brand-soft underline-offset-2 hover:underline">
-                  improvements
-                </Link>{" "}
-                page.
-              </p>
-            </div>
+            <EmptyState
+              title="No experiments yet"
+              description="Experiments are A/B tests between prompt versions. Run seed to populate."
+            />
           ) : (
             <ul role="list" className="divide-y divide-hairline">
               {experiments.map((exp) => {

@@ -139,6 +139,8 @@ async def run_experiment(
     phoenix_client: Client | None,
     mcp_client: PhoenixMCPProtocol,
     db: "aiosqlite.Connection | None" = None,
+    *,
+    phoenixloop_cycle_id: str | None = None,
 ) -> ExperimentRecord:
     """Run baseline vs candidate end-to-end and return a populated ExperimentRecord.
 
@@ -152,6 +154,10 @@ async def run_experiment(
             baseline prompt + the failing tickets and to persist nothing
             (the experiment doesn't write to the main agent_runs table —
             those would pollute the activity feed with synthetic runs).
+        phoenixloop_cycle_id: P2-8 audit. Propagated into every span the
+            experiment emits so a judge can filter the whole healing cycle
+            (support_agent + diagnosis_agent + experiments + release_gate).
+            Falls back to ``trigger.improvement_trigger_id`` when not set.
     """
     experiment_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
@@ -200,12 +206,14 @@ async def run_experiment(
             created_at=now,
         )
 
+    cycle_id_for_spans = phoenixloop_cycle_id or trigger.improvement_trigger_id
     baseline_pairs = await _run_agent_on_examples(
         examples=examples,
         prompt_text=baseline_template,
         prompt_label=baseline_label,
         purpose="experiment_baseline",
         db=db,
+        phoenixloop_cycle_id=cycle_id_for_spans,
     )
     candidate_pairs = await _run_agent_on_examples(
         examples=examples,
@@ -213,6 +221,7 @@ async def run_experiment(
         prompt_label=candidate_label,
         purpose="experiment_candidate",
         db=db,
+        phoenixloop_cycle_id=cycle_id_for_spans,
     )
 
     baseline_per_eval = await _score_runs(baseline_pairs)
@@ -649,12 +658,18 @@ async def _run_agent_on_examples(
     prompt_label: str,
     purpose: str,
     db: "aiosqlite.Connection",
+    *,
+    phoenixloop_cycle_id: str | None = None,
 ) -> list[tuple[SupportTicket, AgentRun]]:
     """Run the support agent on each ticket with the given prompt.
 
     Each run is tagged ``gemini_call_purpose=purpose`` for the token audit.
     Runs are NOT persisted to the main agent_runs table — these are synthetic
     experiment runs and would clutter the activity feed.
+
+    ``phoenixloop_cycle_id`` (P2-8) is forwarded to every span so a judge
+    can group baseline+candidate runs under the same healing cycle. In
+    practice the caller passes ``trigger.improvement_trigger_id``.
 
     Returns ``(ticket, agent_run)`` pairs so the downstream eval scoring can
     use the ticket's real category instead of a stub.
@@ -674,6 +689,7 @@ async def _run_agent_on_examples(
                 prompt_override=prompt_text,
                 prompt_version_label=prompt_label,
                 gemini_call_purpose=purpose,
+                phoenixloop_cycle_id=phoenixloop_cycle_id,
             )
             pairs.append((ticket, run))
         except Exception as exc:

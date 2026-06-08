@@ -70,8 +70,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # outlives any single request. ADK's MCPSessionManager caches the
     # session per-toolset; per-request agents share the warm connection.
     app.state.phoenix_mcp_toolset = None
+    app.state.diagnosis_mcp_toolset = None
     try:
-        from src.agent.mcp_tools import build_phoenix_mcp_toolset
+        from src.agent.mcp_tools import (
+            DIAGNOSIS_ALLOWED_TOOLS,
+            build_diagnosis_mcp_toolset,
+            build_phoenix_mcp_toolset,
+        )
 
         toolset = build_phoenix_mcp_toolset()
         if toolset is not None:
@@ -84,11 +89,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 "Phoenix MCP toolset warmed at startup (tool count=%d)",
                 len(tools),
             )
+
+        # Diagnosis toolset is constructed but NOT eager-warmed: warming it
+        # would spawn a second `npx @arizeai/phoenix-mcp@latest` subprocess
+        # at every lifespan startup, doubling test-suite cold-start cost
+        # (each TestClient instance triggers lifespan). First diagnosis call
+        # pays the ~5-10s ADK-handshake cost once per process; production
+        # diagnosis isn't latency-sensitive at that scale.
+        diagnosis_toolset = build_diagnosis_mcp_toolset()
+        if diagnosis_toolset is not None:
+            app.state.diagnosis_mcp_toolset = diagnosis_toolset
+            logger.info(
+                "Diagnosis MCP toolset registered (lazy; filter=%d tools)",
+                len(DIAGNOSIS_ALLOWED_TOOLS),
+            )
     except Exception as exc:
         logger.warning(
             "Phoenix MCP toolset warm-up failed (non-fatal): %s", exc
         )
         app.state.phoenix_mcp_toolset = None
+        app.state.diagnosis_mcp_toolset = None
 
     # Auto-seed runs in the background so the API is reachable immediately.
     # Live mode takes 60-90s (real Gemini calls + diagnosis + experiment);
@@ -97,6 +117,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # circuits when agent_runs is non-empty.
     db_path = settings.database_url.replace("sqlite:///", "")
     mcp_toolset = app.state.phoenix_mcp_toolset
+    diagnosis_mcp_toolset = app.state.diagnosis_mcp_toolset
 
     async def _seed_in_background() -> None:
         try:
@@ -104,7 +125,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             from src.db import get_db
 
             async with get_db(db_path) as db:
-                summary = await full_loop_seed(db, mcp_toolset=mcp_toolset)
+                summary = await full_loop_seed(
+                    db,
+                    mcp_toolset=mcp_toolset,
+                    diagnosis_mcp_toolset=diagnosis_mcp_toolset,
+                )
             if not summary.get("skipped"):
                 logger.info("auto-seed complete: %s", summary)
             else:
@@ -132,14 +157,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except (asyncio.CancelledError, Exception):
             pass
 
-    toolset = getattr(app.state, "phoenix_mcp_toolset", None)
-    if toolset is not None:
-        try:
-            await toolset.close()
-        except Exception as exc:
-            logger.warning(
-                "Phoenix MCP toolset close failed (non-fatal): %s", exc
-            )
+    for attr in ("phoenix_mcp_toolset", "diagnosis_mcp_toolset"):
+        toolset = getattr(app.state, attr, None)
+        if toolset is not None:
+            try:
+                await toolset.close()
+            except Exception as exc:
+                logger.warning(
+                    "%s close failed (non-fatal): %s", attr, exc
+                )
 
 
 app = FastAPI(title="PhoenixLoop API", version="0.1.0", lifespan=lifespan)

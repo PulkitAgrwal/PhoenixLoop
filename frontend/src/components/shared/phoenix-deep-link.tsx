@@ -8,6 +8,7 @@ type PhoenixDeepLinkProps = {
   experimentId?: string;
   datasetId?: string;
   projectName?: string;
+  path?: string;
   label?: string;
 };
 
@@ -32,6 +33,10 @@ function buildPhoenixUrl(props: PhoenixDeepLinkProps): string | null {
   }
   if (props.projectName) {
     return `${PHOENIX_BASE_URL}/projects/${encodeURIComponent(props.projectName)}`;
+  }
+  if (props.path) {
+    const normalized = props.path.startsWith("/") ? props.path : `/${props.path}`;
+    return `${PHOENIX_BASE_URL}${normalized}`;
   }
   return null;
 }

@@ -30,6 +30,7 @@ async def stream_full_loop(
     db: aiosqlite.Connection,
     *,
     mcp_toolset: Any | None = None,
+    diagnosis_mcp_toolset: Any | None = None,
 ) -> AsyncIterator[tuple[str, dict]]:
     """Run the live healing loop and yield progress events at each stage."""
     from src.agent.diagnosis_agent import run_diagnosis_agent
@@ -109,6 +110,7 @@ async def stream_full_loop(
             agent_run = await run_agent(
                 ticket, session_id, db,
                 phoenix_client=phoenix, mcp_toolset=mcp_toolset,
+                phoenixloop_cycle_id=cycle_id,
             )
         except Exception as exc:
             logger.warning("stream: agent failed on %s: %s", ticket.ticket_id, exc)
@@ -173,8 +175,15 @@ async def stream_full_loop(
     }
 
     yield "diagnosis_started", {"improvement_trigger_id": trigger.improvement_trigger_id}
+    from src.db import resolve_trace_ids
+    example_trace_ids = await resolve_trace_ids(db, trigger.example_run_ids_json)
     try:
-        diagnosis = await run_diagnosis_agent(trigger, mcp_toolset)
+        diagnosis = await run_diagnosis_agent(
+            trigger,
+            diagnosis_mcp_toolset or mcp_toolset,
+            phoenixloop_cycle_id=cycle_id,
+            example_trace_ids=example_trace_ids,
+        )
     except Exception as exc:
         logger.warning("stream: diagnosis_agent failed: %s", exc)
         diagnosis = {
@@ -193,9 +202,22 @@ async def stream_full_loop(
         "confidence": diagnosis.get("confidence"),
     }
 
+    # Pre-resolve the local production prompt so the patch synthesizer reads
+    # the clean Helios seed text rather than whatever (potentially polluted)
+    # template Phoenix's `production` tag points at. Avoids the prompt-text
+    # repr-nesting bug whereby each cycle compounds escape characters.
+    from src.agent.prompts import get_production_prompt
+    local_prompt_text, _ = await get_production_prompt(db)
+
     mcp_client = PhoenixMCPClient()
     try:
-        proposal = await generate_proposal(trigger, diagnosis, mcp_client, db=db)
+        proposal = await generate_proposal(
+            trigger,
+            diagnosis,
+            mcp_client,
+            current_prompt=local_prompt_text,
+            db=db,
+        )
     except Exception as exc:
         logger.warning("stream: proposal generation failed: %s", exc)
         proposal = {"error": str(exc), "patch_type": "prompt_constraint"}
@@ -236,7 +258,10 @@ async def stream_full_loop(
 
     yield "experiment_started", {"improvement_trigger_id": trigger.improvement_trigger_id}
     try:
-        experiment = await run_experiment(trigger, phoenix, mcp_client, db=db)
+        experiment = await run_experiment(
+            trigger, phoenix, mcp_client, db=db,
+            phoenixloop_cycle_id=cycle_id,
+        )
     except Exception as exc:
         logger.warning("stream: experiment failed: %s", exc)
         yield "experiment_failed", {"error": str(exc)}

@@ -21,9 +21,31 @@ from src.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+# The exact Phoenix MCP tools the diagnosis sub-agent is allowed to call.
+# Enforced at construction time via McpToolset's tool_filter so the model
+# literally cannot reach for anything outside this list — including
+# list-projects, which requires a projectIdentifier we don't supply and
+# fails at runtime, polluting traces with confidence=0 diagnoses.
+DIAGNOSIS_ALLOWED_TOOLS: list[str] = [
+    "get-spans",
+    "get-span-annotations",
+    "list-traces",
+    "list-sessions",
+    "list-experiments-for-dataset",
+]
 
-def build_phoenix_mcp_toolset() -> Any | None:
+
+def build_phoenix_mcp_toolset(
+    *, tool_filter: list[str] | None = None
+) -> Any | None:
     """Build the Phoenix MCP toolset, or return None when unconfigured.
+
+    Args:
+        tool_filter: Optional whitelist of tool names. When provided, the
+            returned toolset exposes ONLY these tools to the agent. Used
+            to scope the diagnosis sub-agent's surface area (see
+            ``DIAGNOSIS_ALLOWED_TOOLS``). When ``None`` (default), all
+            Phoenix MCP tools are exposed.
 
     Returns:
         An ``McpToolset`` instance ready to register on the ADK agent's
@@ -54,9 +76,21 @@ def build_phoenix_mcp_toolset() -> Any | None:
             server_params=server_params,
             timeout=60.0,
         ),
+        tool_filter=tool_filter,
     )
     logger.info(
-        "Phoenix MCP toolset built (npx @arizeai/phoenix-mcp@latest, base_url=%s)",
+        "Phoenix MCP toolset built (npx @arizeai/phoenix-mcp@latest, base_url=%s, tool_filter=%s)",
         settings.phoenix_base_url,
+        tool_filter or "all",
     )
     return toolset
+
+
+def build_diagnosis_mcp_toolset() -> Any | None:
+    """Build a filtered Phoenix MCP toolset for the diagnosis sub-agent.
+
+    Restricts the surface to ``DIAGNOSIS_ALLOWED_TOOLS`` so the model
+    cannot opportunistically call tools that need credentials/args this
+    pipeline doesn't supply (notably ``list-projects``).
+    """
+    return build_phoenix_mcp_toolset(tool_filter=DIAGNOSIS_ALLOWED_TOOLS)

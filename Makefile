@@ -1,4 +1,4 @@
-.PHONY: help dev test lint clean seed
+.PHONY: help dev test lint clean seed deploy demo
 
 BACKEND_VENV := backend/.venv/bin
 BACKEND_PYTHON := $(BACKEND_VENV)/python
@@ -11,6 +11,8 @@ help:
 	@echo "  make lint    Run ruff on backend + ESLint on frontend"
 	@echo "  make clean   docker compose down -v (wipes the DB volume)"
 	@echo "  make seed    POST /api/demo/seed against $$API_URL (default $(API_URL))"
+	@echo "  make deploy  Deploy both Cloud Run services (PROJECT_ID, REGION env vars)"
+	@echo "  make demo    docker compose up + seed + open localhost:3000"
 
 dev:
 	docker compose up --build
@@ -36,3 +38,19 @@ seed:
 	@echo "POST $(API_URL)/api/demo/seed"
 	@curl -fsS -X POST -H "Idempotency-Key: make-seed" $(API_URL)/api/demo/seed | head -c 4096
 	@echo
+
+deploy:
+	@./deploy_cloud_run.sh $(PROJECT_ID) $(REGION)
+
+demo:
+	@docker compose up -d
+	@echo "Waiting for backend to become healthy..."
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+		if curl -fsS $(API_URL)/api/health > /dev/null 2>&1; then \
+			echo "Backend healthy"; break; \
+		fi; \
+		sleep 2; \
+	done
+	@curl -fsS -X POST -H "Idempotency-Key: make-demo" $(API_URL)/api/demo/seed | head -c 200
+	@echo
+	@command -v open >/dev/null && open http://localhost:3000 || xdg-open http://localhost:3000 || echo "Open http://localhost:3000 manually"

@@ -60,7 +60,7 @@ export function DiagnosisTrace({ diagnosis }: DiagnosisTraceProps) {
       <div className="px-4 py-3">
         {!hasDiagnosis ? (
           <p className="text-body-sm text-mute">
-            Run <CodeInline>Diagnose via Phoenix</CodeInline> to invoke the diagnosis sub-agent.
+            Run <CodeInline>Read failing spans via Phoenix MCP</CodeInline> to invoke the diagnosis sub-agent.
             The agent calls <CodeInline>phoenix-mcp:get-spans</CodeInline> and{" "}
             <CodeInline>phoenix-mcp:get-span-annotations</CodeInline>, reads its own failing
             spans, and names the recurring pattern.

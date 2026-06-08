@@ -15,7 +15,7 @@ Verified against arize-phoenix-client SDK API (context7, May 2026):
 
 import logging
 from collections.abc import Callable
-from typing import Protocol
+from typing import Any, Protocol
 
 import pandas as pd
 from pydantic import BaseModel, Field
@@ -24,6 +24,64 @@ from src.config import get_settings
 from src.tracing.phoenix_client import get_phoenix_client
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_prompt_text(template: Any) -> str:
+    """Pull the system-message ``content`` string out of a Phoenix prompt template.
+
+    Phoenix's ``PromptVersion`` stores prompts as a list of chat messages
+    (``[{"role": "system", "content": "..."}]``). Naively stringifying the
+    template via ``str()`` produces a Python repr like
+    ``"[{'role': 'system', 'content': '...'}]"`` — when that string is fed
+    back into the patch synthesizer and stored again, each cycle adds one
+    level of escape nesting, eventually producing unreadable garbage.
+
+    This helper extracts the actual prompt text regardless of whether the
+    SDK returns the template as a ``list[dict]``, a wrapped
+    ``PromptChatTemplate`` object, or a plain ``str`` (older versions).
+    """
+    if template is None:
+        return ""
+    if isinstance(template, str):
+        return template
+
+    # Phoenix's wrapped template may expose `.messages` or be the raw list.
+    if hasattr(template, "messages"):
+        messages: Any = template.messages
+    elif isinstance(template, list):
+        messages = template
+    elif isinstance(template, dict) and "messages" in template:
+        messages = template["messages"]
+    else:
+        # Unknown shape — bail to repr so we don't silently lose data.
+        return str(template)
+
+    def _msg_content(msg: Any) -> str:
+        if isinstance(msg, dict):
+            content = msg.get("content", "")
+        else:
+            content = getattr(msg, "content", "")
+        if isinstance(content, list):
+            # Multipart content — concatenate text parts only.
+            parts = []
+            for p in content:
+                text = p.get("text", "") if isinstance(p, dict) else getattr(p, "text", "")
+                if text:
+                    parts.append(text)
+            return "\n".join(parts)
+        return str(content)
+
+    def _msg_role(msg: Any) -> str:
+        if isinstance(msg, dict):
+            return msg.get("role", "")
+        return getattr(msg, "role", "")
+
+    for msg in messages:
+        if _msg_role(msg) == "system":
+            return _msg_content(msg)
+    if messages:
+        return _msg_content(messages[0])
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -312,7 +370,7 @@ class PhoenixMCPClient:
             return PromptInfo(
                 name="support-agent",
                 tag="production",
-                template=str(getattr(prompt, "_template", "")),
+                template=_extract_prompt_text(getattr(prompt, "_template", None)),
                 version_id=str(getattr(prompt, "id", "")),
                 model_name=getattr(prompt, "_model_name", None),
             )
