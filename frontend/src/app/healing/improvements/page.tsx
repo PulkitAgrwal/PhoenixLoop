@@ -17,6 +17,7 @@ import { Eyebrow } from "@/components/ui/eyebrow";
 import { Tag } from "@/components/ui/tag";
 import { CodeInline } from "@/components/ui/code-inline";
 import { StatusDot } from "@/components/ui/status-dot";
+import { EmptyState } from "@/components/shared/empty-state";
 import { PhoenixDeepLink } from "@/components/shared/phoenix-deep-link";
 import { EvidenceCard } from "@/components/improvements/evidence-card";
 import { DiagnosisTrace } from "@/components/improvements/diagnosis-trace";
@@ -151,7 +152,7 @@ function TriggerDetail({ trigger, onRefresh }: TriggerDetailProps) {
             ? "Diagnosing…"
             : hasDiagnosis
               ? "Re-diagnose via Phoenix"
-              : "Diagnose via Phoenix"}
+              : "Read failing spans via Phoenix MCP"}
         </Button>
         {canGenerateRegressions && (
           <Button
@@ -338,17 +339,10 @@ export default function ImprovementsPage() {
               {listError}
             </div>
           ) : triggers.length === 0 ? (
-            <div className="flex flex-col items-center gap-3 px-6 py-12 text-center">
-              <p className="text-body-sm text-body max-w-[40ch]">
-                No improvement triggers yet. The seed produces one on first boot.
-              </p>
-              <Button variant="outline" size="sm" asChild>
-                <a href="/activity/failures">
-                  View failures
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </a>
-              </Button>
-            </div>
+            <EmptyState
+              title="No improvement triggers yet"
+              description="Improvement triggers appear when a failure cluster crosses threshold. Run seed."
+            />
           ) : (
             <ul role="list" className="divide-y divide-hairline">
               {triggers.map((t) => {

@@ -25,12 +25,14 @@ const PHOENIX_URL = process.env.NEXT_PUBLIC_PHOENIX_URL;
 function formatTime(iso?: string | null): string {
   if (!iso) return "—";
   try {
-    return new Date(iso).toLocaleTimeString([], {
+    const time = new Date(iso).toLocaleTimeString([], {
       hour12: false,
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",
+      timeZone: "UTC",
     });
+    return `${time} UTC`;
   } catch {
     return iso;
   }

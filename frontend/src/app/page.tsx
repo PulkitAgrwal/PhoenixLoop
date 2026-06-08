@@ -29,7 +29,7 @@ function WatchItHealButton() {
       size="lg"
       onClick={() => (hasActiveCycle ? openModal() : startCycle())}
     >
-      {hasActiveCycle ? "Reopen healing cycle" : "Watch it heal (90 s)"}
+      {hasActiveCycle ? "Reopen healing cycle" : "Watch the agent heal itself (~5 min live · 90s fixture)"}
       <ArrowRight className="h-4 w-4" />
     </Button>
   );
@@ -155,9 +155,18 @@ function colorize(line: string): React.ReactNode {
   return parts;
 }
 
+type TerminalLine = {
+  ts: string;
+  ev: string;
+  verb: string;
+  arg: string;
+  tone?: "fail";
+};
+
 function FauxTerminal() {
-  const lines = React.useMemo(
+  const lines = React.useMemo<TerminalLine[]>(
     () => [
+      { ts: "12:14:02.001", ev: "evaluator", verb: "CitationPresence", arg: "FAILED · score=0.42", tone: "fail" },
       { ts: "12:14:02.114", ev: "phoenix-mcp", verb: "get-spans", arg: "filter='eval.status=fail' limit=20" },
       { ts: "12:14:02.341", ev: "phoenix-mcp", verb: "get-span-annotations", arg: "span_id=7f1a…" },
       { ts: "12:14:02.602", ev: "diagnosis", verb: "cluster", arg: "failure_key=CitationPresence" },
@@ -191,17 +200,32 @@ function FauxTerminal() {
         <span className="font-mono text-caption text-mute">demo seed</span>
       </div>
       <div className="px-4 py-3 font-mono text-code text-canvas-text-soft min-h-[168px]">
-        {lines.slice(0, count).map((l, i) => (
-          <div key={i} className="animate-stream-line whitespace-nowrap">
-            <span className="text-mute">{l.ts}</span>{" "}
-            <span className="text-brand">{l.ev}</span>
-            <span className="text-mute">:</span>
-            <span className="text-canvas-text-soft">{l.verb}</span>
-            <span className="text-mute">(</span>
-            <span className="text-body">{l.arg}</span>
-            <span className="text-mute">)</span>
-          </div>
-        ))}
+        {lines.slice(0, count).map((l, i) => {
+          if (l.tone === "fail") {
+            return (
+              <div key={i} className="animate-stream-line whitespace-nowrap text-fail">
+                <span>{l.ts}</span>{" "}
+                <span>{l.ev}</span>
+                <span>:</span>
+                <span>{l.verb}</span>
+                <span>(</span>
+                <span>{l.arg}</span>
+                <span>)</span>
+              </div>
+            );
+          }
+          return (
+            <div key={i} className="animate-stream-line whitespace-nowrap">
+              <span className="text-mute">{l.ts}</span>{" "}
+              <span className="text-brand">{l.ev}</span>
+              <span className="text-mute">:</span>
+              <span className="text-canvas-text-soft">{l.verb}</span>
+              <span className="text-mute">(</span>
+              <span className="text-body">{l.arg}</span>
+              <span className="text-mute">)</span>
+            </div>
+          );
+        })}
         {count < lines.length && (
           <span className="inline-block h-3.5 w-1.5 translate-y-0.5 bg-brand animate-pulse-dot" />
         )}
@@ -861,8 +885,9 @@ function CTABand() {
             Boot the stack. Click one ticket. Watch one promotion.
           </h3>
           <p className="mt-3 text-body-md text-body">
-            The seed runs eight tickets, two intentional failures, one diagnosis, one experiment and
-            one release-gate verdict. Under thirty Gemini calls. About ninety seconds.
+            The seed runs six tickets, two intentional failures, one diagnosis, one experiment and
+            one release-gate verdict. Around 4–5 minutes in live mode (real Gemini calls) or ~90s
+            with <code>LIGHTWEIGHT_DEMO=true</code> (fixture replay).
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -908,7 +933,7 @@ function Footer() {
             Improvements
           </Link>
           <Link href="/healing/experiments" className="text-body hover:text-ink">
-            Experiments
+            A/B prompt tests
           </Link>
           <Link href="/prompts" className="text-body hover:text-ink">
             Prompts

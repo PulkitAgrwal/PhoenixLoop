@@ -1,6 +1,9 @@
 # PhoenixLoop
 
-> **A self-healing Gemini support agent powered by Arize Phoenix MCP, OpenInference tracing, and a real release gate.**
+> **PhoenixLoop** — observability-driven self-improvement for Gemini support agents. Failure clusters → diagnosis via Phoenix MCP → A/B test → release gate. Every cycle is auditable.
+
+**30-second local boot:** `make demo && open http://localhost:3000`
+(Requires Docker + a populated `.env`. Set `LIGHTWEIGHT_DEMO=true` for a zero-Gemini-call fixture replay.)
 
 [![Build](https://img.shields.io/badge/build-passing-00d992?style=flat-square)](https://github.com/PulkitAgrwal/PhoenixLoop/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](./LICENSE)
@@ -9,6 +12,30 @@
 [![Arize Track](https://img.shields.io/badge/track-Arize-0f4c3a?style=flat-square)](https://rapid-agent.devpost.com/details/arize-resources)
 [![Phoenix-instrumented](https://img.shields.io/badge/Phoenix-instrumented-00d992?style=flat-square)](https://arize.com/docs/phoenix)
 
+<p align="center">
+  <img src="frontend/public/screenshots/hero.png" alt="Landing page — terminal animation cold-opens on a CitationPresence FAILED line, hero CTA reads &quot;Watch the agent heal itself (~5 min live · 90s fixture)&quot;" width="80%" />
+</p>
+
+<table>
+  <tr>
+    <td><img src="frontend/public/screenshots/healing-modal.png" alt="Healing-cycle modal mid-run — 6 of 11 stages checked, live SSE log with UTC timestamps" /></td>
+    <td><img src="frontend/public/screenshots/diagnosis-trace.png" alt="Diagnosis trace — phoenix-mcp:get-spans + get-span-annotations rendered as span rows, DIAGNOSED verdict, pattern = &quot;Refund explanations omit POL-REFUND policy citations&quot;" /></td>
+  </tr>
+  <tr>
+    <td><img src="frontend/public/screenshots/prompt-diff.png" alt="Prompt diff — candidate v1.1-refund-citation-required appends the rule &quot;For any refund-category response, you MUST call search_policy and cite at least one POL-REFUND-XXX&quot;" /></td>
+    <td><img src="frontend/public/screenshots/release-gate.png" alt="Release gate verdict — score 91.4/100, 6/6 promotion rules passed, Score Delta +0.490 (target ≥ 0.050)" /></td>
+  </tr>
+  <tr>
+    <td><img src="frontend/public/screenshots/experiments-scoreboard.png" alt="Experiments scoreboard — baseline v1.0.0 release score 0.42 vs candidate 0.91 (+117%), regression canaries 100%, safety canaries 100%" /></td>
+    <td><img src="frontend/public/screenshots/activity-runs.png" alt="Activity → Runs — every ADK agent_run captured by Phoenix with status, eval results, latency" /></td>
+  </tr>
+  <tr>
+    <td><img src="frontend/public/screenshots/conversation.png" alt="Conversation page — Refund-timing scenario loaded, customer message visible, Production prompt v1.0.0 badge top-right, LIVE TRACE panel on the right" /></td>
+    <td><img src="frontend/public/screenshots/prompts.png" alt="Prompts page — v1.0.0 seed + v1.1-refund-citation-required candidate, full prompt text scrollable" /></td>
+  </tr>
+</table>
+
+**Code:** https://github.com/PulkitAgrwal/PhoenixLoop
 **Live demo:** https://phoenixloop-frontend-856079316421.us-central1.run.app
 **API health:** https://phoenixloop-backend-856079316421.us-central1.run.app/api/health
 **Devpost:** Submitted to the [Google Cloud Rapid Agent Hackathon — Arize track](https://rapid-agent.devpost.com)
@@ -19,7 +46,7 @@
 
 - **The agent fixes itself.** When PhoenixLoop's support agent fails the same way three times, a diagnosis sub-agent reads its own failing spans back from Arize Phoenix via MCP, drafts a one-line prompt patch, A/B-tests it against a frozen regression set, and only ships the candidate if a release gate clears six promotion rules.
 - **Phoenix is load-bearing, not a logging skin.** Every trace, eval annotation, dataset row, prompt version, and experiment is round-tripped through Phoenix. Take Phoenix away and the loop literally cannot close.
-- **One full healing cycle runs in ~90 seconds** on the auto-seed: eight tickets, two intentional failures, one cluster, one diagnosis, one experiment, one verdict. Under thirty Gemini calls. Measurable end-to-end.
+- **One full healing cycle runs in ~90 seconds** on the auto-seed: six tickets, two intentional failures, one cluster, one diagnosis, one experiment, one verdict. Under thirty Gemini calls. Measurable end-to-end.
 - **Deployed on Cloud Run.** Live demo is one click from the hero. Backend runs Gemini through Vertex AI. See [DEPLOYMENT.md](./DEPLOYMENT.md) for the gcloud commands.
 
 ---
@@ -107,6 +134,13 @@ flowchart LR
     class AGG,TRIG,DX,PROP,EXP,RG self
 ```
 
+<details>
+<summary>PNG fallback (for environments that don't render Mermaid, e.g. Devpost description)</summary>
+
+![PhoenixLoop architecture](docs/architecture.png)
+
+</details>
+
 The single architectural rule: **anything the agent reads on the hot path lives in the local SQLite mirror.** Phoenix is the observability surface and the experiment runtime — not the configuration store. If Phoenix is unreachable, the agent keeps answering tickets; the loop just doesn't advance until Phoenix comes back.
 
 ---
@@ -159,7 +193,7 @@ The backend comes up on `:8000`, the frontend on `:3000`. Open `http://localhost
 | 0s | `docker compose up --build` starts | Builds two images, starts containers |
 | ~10s | Backend `/api/health` returns 200 | FastAPI lifespan started, SQLite migrated |
 | ~10–60s | Phoenix MCP "npx cold start" | `npx -y @arizeai/phoenix-mcp@latest` is pre-warmed at lifespan startup so the agent's first MCP call doesn't pay this cost. **This is the only thing that looks slow on cold boot — it's expected.** |
-| ~60s | Auto-seed starts | `lifespan` posts to `/api/demo/seed`; you'll see 8 tickets created, 2 marked as intentional failures, the failure aggregator clusters them |
+| ~60s | Auto-seed starts | `lifespan` posts to `/api/demo/seed`; you'll see 6 tickets created, 2 marked as intentional failures, the failure aggregator clusters them |
 | ~90s | Full healing cycle visible | One trigger, one diagnosis, one experiment, one release-gate verdict in the activity feed |
 
 If the UI shows "—" or "No data yet" for the first minute, the seed is still running — refresh after a minute and the activity feed populates.
@@ -191,6 +225,10 @@ LIGHTWEIGHT_DEMO=true docker compose up --build
 ```
 
 Auto-seed reads `backend/tests/fixtures/seed/` instead of calling Gemini. Useful for UI work without burning token budget.
+
+### Deploy to Cloud Run
+
+`make deploy PROJECT_ID=phoenixloop REGION=us-central1` (requires gcloud + Application Default Credentials). The script mirrors `.github/workflows/ci.yml`.
 
 ---
 
@@ -328,7 +366,7 @@ Idempotent: rerunning `POST /api/demo/seed` is safe. Use `Idempotency-Key` heade
 
 ### Stage 1 — Run the agent on every ticket (~30s)
 
-`POST /api/demo/run-all` walks the eight tickets and runs the support agent against each. Each run:
+`POST /api/demo/run-all` walks the six tickets and runs the support agent against each. Each run:
 
 1. Opens an ADK root span (`acmeflow_support_agent`).
 2. Calls 0–3 of the four production tools (`search_policy`, `get_customer_context`, `retrieve_similar_resolutions`, `create_escalation`).

@@ -8,16 +8,15 @@ import {
   XCircle,
   Clock,
   Activity,
-  MessageSquare,
   ChevronDown,
   ChevronRight,
   RefreshCw,
 } from "lucide-react";
-import Link from "next/link";
 
 import { StatCard } from "@/components/shared/stat-card";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
+import { EmptyState } from "@/components/shared/empty-state";
 import { TraceWaterfall } from "@/components/traces/trace-waterfall";
 import { SpanDetail } from "@/components/traces/span-detail";
 import { EvalBadge } from "@/components/traces/eval-badge";
@@ -507,21 +506,10 @@ function TracesPageInner() {
               <TableSkeleton rows={5} />
             </div>
           ) : runRows.length === 0 ? (
-            /* Empty state */
-            <div className="flex flex-col items-center justify-center gap-3 px-6 py-16">
-              <MessageSquare className="h-10 w-10 text-muted-foreground/40" />
-              <div className="text-center">
-                <p className="text-sm font-medium text-muted-foreground">
-                  No traces yet
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Run a conversation first to see traces here.
-                </p>
-              </div>
-              <Button variant="outline" size="sm" asChild>
-                <Link href="/conversation">Go to Conversation</Link>
-              </Button>
-            </div>
+            <EmptyState
+              title="No agent runs yet"
+              description="Kick off a ticket — or run seed to populate the dashboard."
+            />
           ) : (
             <div>
               <Table>

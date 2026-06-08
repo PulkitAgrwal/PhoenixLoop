@@ -512,6 +512,26 @@ async def get_agent_runs_for_session(
     return [_agent_run_from_row(r) for r in rows]
 
 
+async def resolve_trace_ids(
+    db: aiosqlite.Connection, agent_run_ids: list[str]
+) -> list[str]:
+    """Look up the Phoenix trace_id for each agent_run_id, drop nulls.
+
+    Used by the diagnosis pipeline to translate local UUIDs into the
+    32-char hex trace IDs Phoenix MCP's ``get-spans`` actually accepts.
+    """
+    if not agent_run_ids:
+        return []
+    placeholders = ",".join("?" * len(agent_run_ids))
+    cursor = await db.execute(
+        f"SELECT trace_id FROM agent_runs "
+        f"WHERE agent_run_id IN ({placeholders}) AND trace_id IS NOT NULL",
+        agent_run_ids,
+    )
+    rows = await cursor.fetchall()
+    return [row["trace_id"] for row in rows if row["trace_id"]]
+
+
 # ---------------------------------------------------------------------------
 # CRUD — Eval Results
 # ---------------------------------------------------------------------------

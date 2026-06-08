@@ -284,6 +284,7 @@ jobs:
             --image=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.AR_REPO }}/backend:${{ github.sha }} \
             --region=${{ env.GCP_REGION }} \
             --project=${{ env.GCP_PROJECT }} \
+            --update-env-vars=SKIP_AUTOSEED=false,LIGHTWEIGHT_DEMO=false \
             --quiet
 
       - name: Smoke test /api/health
@@ -297,6 +298,18 @@ jobs:
           done
           echo "::error::Backend never became healthy after deploy"
           exit 1
+
+      - name: Seed demo data (idempotent)
+        run: |
+          curl -fsS -X POST \
+            -H "Idempotency-Key: ci-seed-${{ github.sha }}" \
+            "${{ env.BACKEND_URL }}/api/demo/seed" \
+            | head -c 4096
+          echo
+          # Verify /api/stats now returns non-zero traced runs.
+          STATS="$(curl -fsS ${{ env.BACKEND_URL }}/api/stats)"
+          echo "$STATS"
+          echo "$STATS" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['data']['agent_runs_traced']>0, 'stats still zero after seed'"
 
   deploy-frontend:
     name: Deploy Frontend (Cloud Run)

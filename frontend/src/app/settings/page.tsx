@@ -14,6 +14,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
+import { PhoenixDeepLink } from "@/components/shared/phoenix-deep-link";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -583,6 +584,30 @@ export default function SettingsPage() {
             )}
           </motion.div>
         )}
+      </motion.section>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Phoenix Cloud workspace                                              */}
+      {/* ------------------------------------------------------------------ */}
+      <motion.section
+        custom={4}
+        initial="hidden"
+        animate="visible"
+        variants={fadeUpVariants}
+        className="rounded-md border border-hairline bg-canvas-soft p-6"
+      >
+        <h2 className="mb-2 text-base font-semibold text-ink-strong">
+          Phoenix Cloud workspace
+        </h2>
+        <p className="mb-4 text-body-sm text-body">
+          Cross-reference everything PhoenixLoop logs by jumping to the live Phoenix workspace.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <PhoenixDeepLink path="/projects" label="Open project list" />
+          <PhoenixDeepLink path="/datasets" label="Open datasets" />
+          <PhoenixDeepLink path="/prompts" label="Open prompts" />
+          <PhoenixDeepLink path="/experiments" label="Open experiments" />
+        </div>
       </motion.section>
     </div>
   );

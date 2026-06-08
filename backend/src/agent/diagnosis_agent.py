@@ -11,7 +11,7 @@ reads its own observability data to decide what to fix. The ``phoenix-mcp:``
 spans the agent produces are real, not theater: the agent cannot complete
 its job without them.
 
-Token economy: the agent is constrained by prompt to make at most 2 MCP
+Token economy: the agent is constrained by prompt to make at most 4 MCP
 tool calls and emit the final JSON in the same turn, so each invocation
 is ~3 Gemini calls (planner + 2 tool-call turns + final answer). Logged
 under ``gemini_call_purpose=diagnosis_agent``.
@@ -69,19 +69,38 @@ by a release-gate pipeline.
 
 ## Available tools
 
-You have Phoenix MCP tools registered. The two you should reach for:
+Your Phoenix MCP toolset is restricted by the runtime to EXACTLY these \
+five tools — no others are reachable, so do not attempt to call anything \
+else:
 
-1. **get-spans** — fetch the failing spans for a given trace_id or session_id.
+1. **get-spans** — fetch failing spans for a given trace_id or session_id.
    Useful for inspecting tool calls, latencies, errors.
 2. **get-span-annotations** — fetch the eval annotations attached to a span.
    Useful for reading which evaluators failed and why.
+3. **list-traces** — enumerate recent traces in a project. Useful when you \
+need to confirm the failure cluster is still active (most-recent first).
+4. **list-sessions** — enumerate recent sessions. Useful to scope down a \
+noisy project before calling get-spans.
+5. **list-experiments-for-dataset** — list past experiments tied to a \
+dataset. Useful when you want to check whether a similar fix has already \
+been A/B-tested and what its scores were.
 
-Other Phoenix MCP tools exist (datasets, prompts, sessions) but you should \
-not call them — this single diagnosis run does not need them.
+Prefer the broad list-* tools first to locate signal, then narrow with \
+get-spans and get-span-annotations.
+
+**Forbidden calls** — never invoke ``list-projects``, ``get-prompt``, \
+``upsert-prompt``, ``add-prompt-version-tag``, or any tool not in the \
+five listed above. ``list-projects`` in particular fails in this \
+pipeline and will drop your confidence to zero. The Phoenix project \
+name you need is supplied directly in the user message — use it.
 
 ## Constraints — read carefully
 
-- Make AT MOST 2 MCP tool calls per diagnosis. We are token-budgeted.
+- Make AT MOST 4 MCP tool calls per diagnosis. We are token-budgeted.
+- **EVERY tool call MUST include the ``projectIdentifier`` argument set \
+to the project name from the user message** (e.g. ``projectIdentifier="phoenixloop"``). \
+The Phoenix MCP read tools error out without it. Do not skip the tools \
+on this basis — pass the argument every time.
 - After your evidence is gathered, emit your final answer as a single \
 JSON object — no markdown fences, no prose around it.
 - Do not invent evidence. If the MCP calls return nothing useful, say so \
@@ -174,6 +193,8 @@ async def run_diagnosis_agent(
     mcp_toolset: Any | None,
     *,
     session_id: str | None = None,
+    phoenixloop_cycle_id: str | None = None,
+    example_trace_ids: list[str] | None = None,
 ) -> dict:
     """Invoke the diagnosis sub-agent end-to-end and return the diagnosis dict.
 
@@ -213,12 +234,24 @@ async def run_diagnosis_agent(
         session_id=sess_id,
     )
 
+    project_name = get_settings().phoenix_project_name
+    # Prefer real Phoenix trace_ids (resolved by the caller from agent_runs);
+    # only fall back to the trigger's local agent_run_ids if a caller didn't
+    # supply them — those won't actually resolve in Phoenix and the agent
+    # will report "no spans found", but the call still completes cleanly.
+    sample_ids = (example_trace_ids or trigger.example_run_ids_json or [])[:3]
+    id_label = "Phoenix trace_ids" if example_trace_ids else "local agent_run_ids (best-effort)"
     user_message = (
+        f"Phoenix project: `{project_name}` "
+        f"— pass this exact string as the `projectIdentifier` argument to "
+        f"every MCP tool call (get-spans, get-span-annotations, list-traces, "
+        f"list-sessions, list-experiments-for-dataset).\n"
         f"Failure cluster: `{trigger.failure_key}`\n"
         f"Occurrences: {trigger.occurrence_count}\n"
         f"Trigger reason: {trigger.trigger_reason.value}\n"
-        f"Sample failing run IDs (use these as trace_id arguments to "
-        f"get-spans): {trigger.example_run_ids_json[:3]}\n\n"
+        f"Sample failing {id_label} (pass each as `trace_id` to get-spans, "
+        f"together with `projectIdentifier=\"{project_name}\"`): "
+        f"{sample_ids}\n\n"
         "Investigate and emit your final JSON diagnosis."
     )
 
@@ -228,6 +261,10 @@ async def run_diagnosis_agent(
     final_text_parts: list[str] = []
     started = time.monotonic()
 
+    # P2-8: same ``phoenixloop_cycle_id`` plumbing as the support agent —
+    # see ``run_agent_events`` for rationale. Fallback to ``sess_id`` keeps
+    # the attribute populated when no orchestrator is in scope.
+    cycle_id = phoenixloop_cycle_id or sess_id
     with using_attributes(
         session_id=sess_id,
         user_id=user_id,
@@ -236,6 +273,7 @@ async def run_diagnosis_agent(
             "improvement_trigger_id": trigger.improvement_trigger_id,
             "failure_key": trigger.failure_key,
             "purpose": "diagnosis_agent",
+            "phoenixloop_cycle_id": cycle_id,
         },
     ):
         try:

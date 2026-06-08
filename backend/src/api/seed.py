@@ -59,6 +59,7 @@ async def full_loop_seed(
     db: aiosqlite.Connection,
     *,
     mcp_toolset: Any | None = None,
+    diagnosis_mcp_toolset: Any | None = None,
 ) -> dict:
     """Idempotent auto-seed. Returns a small summary dict for logging.
 
@@ -78,7 +79,11 @@ async def full_loop_seed(
         return summary
 
     logger.info("auto-seed: live mode — running the full healing loop")
-    summary = await _seed_live(db, mcp_toolset=mcp_toolset)
+    summary = await _seed_live(
+        db,
+        mcp_toolset=mcp_toolset,
+        diagnosis_mcp_toolset=diagnosis_mcp_toolset,
+    )
     summary["mode"] = "live"
     return summary
 
@@ -309,6 +314,8 @@ _LIVE_TICKETS: list[dict] = [
 async def _seed_live(
     db: aiosqlite.Connection,
     mcp_toolset: Any | None,
+    *,
+    diagnosis_mcp_toolset: Any | None = None,
 ) -> dict:
     """Run the full healing loop end-to-end. Tolerant of partial failures."""
     from src.agent.diagnosis_agent import run_diagnosis_agent
@@ -337,6 +344,11 @@ async def _seed_live(
 
     phoenix = get_phoenix_client()
     now_iso = datetime.now(timezone.utc).isoformat()
+
+    # P2-8: tag every span in this seed run with the same healing-cycle id
+    # so a judge can filter the whole loop (agent + diagnosis + experiment
+    # + release_gate) in one Phoenix predicate.
+    cycle_id = str(uuid.uuid4())
 
     summary: dict[str, Any] = {
         "tickets_seeded": 0,
@@ -384,6 +396,7 @@ async def _seed_live(
                 db,
                 phoenix_client=phoenix,
                 mcp_toolset=mcp_toolset,
+                phoenixloop_cycle_id=cycle_id,
             )
         except Exception as exc:
             logger.warning(
@@ -440,8 +453,15 @@ async def _seed_live(
     trigger = triggers[0]
 
     # 3. Diagnose via the ADK sub-agent (Phoenix MCP toolbelt).
+    from src.db import resolve_trace_ids
+    example_trace_ids = await resolve_trace_ids(db, trigger.example_run_ids_json)
     try:
-        diagnosis = await run_diagnosis_agent(trigger, mcp_toolset)
+        diagnosis = await run_diagnosis_agent(
+            trigger,
+            diagnosis_mcp_toolset or mcp_toolset,
+            phoenixloop_cycle_id=cycle_id,
+            example_trace_ids=example_trace_ids,
+        )
     except Exception as exc:
         logger.warning("Live seed: diagnosis_agent failed: %s", exc)
         diagnosis = {
@@ -463,10 +483,19 @@ async def _seed_live(
     }
 
     # 4. Synthesize the candidate prompt patch.
+    # Pre-resolve from local DB so we don't inherit any polluted text from
+    # Phoenix's `production` tag (see generator docstring + repr-nesting bug).
+    from src.agent.prompts import get_production_prompt
+    local_prompt_text, _ = await get_production_prompt(db)
+
     mcp_client = PhoenixMCPClient()
     try:
         proposal = await generate_proposal(
-            trigger, diagnosis, mcp_client, db=db
+            trigger,
+            diagnosis,
+            mcp_client,
+            current_prompt=local_prompt_text,
+            db=db,
         )
     except Exception as exc:
         logger.warning("Live seed: proposal generation failed: %s", exc)
@@ -482,7 +511,10 @@ async def _seed_live(
 
     # 5. Run the experiment (baseline vs candidate on up to 5 tickets).
     try:
-        experiment = await run_experiment(trigger, phoenix, mcp_client, db=db)
+        experiment = await run_experiment(
+            trigger, phoenix, mcp_client, db=db,
+            phoenixloop_cycle_id=cycle_id,
+        )
     except Exception as exc:
         logger.warning("Live seed: experiment failed: %s", exc)
         summary["errors"].append({"stage": "experiment", "error": str(exc)})

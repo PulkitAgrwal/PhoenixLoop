@@ -7,7 +7,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Pencil, FlaskConical } from "lucide-react";
 import { PromptVersion } from "@/lib/types";
@@ -101,11 +100,11 @@ export function VersionDetail({
           <CardTitle className="text-sm font-semibold">Prompt Text</CardTitle>
         </CardHeader>
         <CardContent>
-          <ScrollArea className="max-h-[60vh] rounded-md border bg-muted/20 p-3">
+          <div className="max-h-[60vh] overflow-y-auto rounded-md border bg-muted/20 p-3">
             <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap break-words">
               {version.prompt_text}
             </pre>
-          </ScrollArea>
+          </div>
         </CardContent>
       </Card>
     </div>

@@ -3,6 +3,7 @@
 import * as React from "react";
 
 import { Eyebrow } from "@/components/ui/eyebrow";
+import { ActivePromptBadge } from "@/components/conversation/active-prompt-badge";
 import { ScenarioSelector } from "@/components/conversation/scenario-selector";
 import { ChatInterface } from "@/components/conversation/chat-interface";
 import { LiveTracePane } from "@/components/conversation/live-trace-pane";
@@ -17,9 +18,12 @@ export default function ConversationPage() {
     <div className="mx-auto max-w-[1280px] px-5 py-10 lg:px-8 lg:py-14">
       <header className="flex flex-col gap-3">
         <Eyebrow tone="brand">Conversation</Eyebrow>
-        <h1 className="text-display-lg text-ink-strong">
-          Run a ticket. Watch every span land.
-        </h1>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <h1 className="text-display-lg text-ink-strong">
+            Run a ticket. Watch every span land.
+          </h1>
+          <ActivePromptBadge />
+        </div>
         <p className="max-w-[68ch] text-body-md text-body">
           Pick a scenario. The agent uses three tools (customer context, policy search,
           retrieve-similar-resolutions via Phoenix MCP) and one optional write

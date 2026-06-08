@@ -26,8 +26,8 @@ const PRIMARY_NAV: NavItem[] = [
     label: "Healing",
     sub: [
       { href: "/healing/improvements", label: "Improvements" },
-      { href: "/healing/experiments", label: "Experiments" },
-      { href: "/healing/release-gate", label: "Release gate" },
+      { href: "/healing/experiments", label: "A/B prompt tests" },
+      { href: "/healing/release-gate", label: "Promotion gate" },
     ],
   },
   { href: "/prompts", label: "Prompts" },

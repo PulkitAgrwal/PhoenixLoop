@@ -106,6 +106,7 @@ async def run_agent_events(
     prompt_override: str | None = None,
     prompt_version_label: str = "production",
     gemini_call_purpose: str = "support_agent_response",
+    phoenixloop_cycle_id: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Run the agent and stream events as they happen.
 
@@ -134,6 +135,12 @@ async def run_agent_events(
     agent = create_agent(prompt_text, mcp_toolset=mcp_toolset)
 
     request_id = str(uuid.uuid4())
+    # P2-8: every span emitted during a healing loop carries the same
+    # ``phoenixloop_cycle_id`` so a Phoenix judge can filter the whole
+    # cycle (support_agent + diagnosis_agent + experiments + release_gate)
+    # in one predicate. Falls back to the session_id so we always emit a
+    # groupable value, even when no orchestrator is in scope.
+    cycle_id = phoenixloop_cycle_id or session_id
     logger.info(
         "gemini_call_purpose=%s ticket_id=%s session_id=%s",
         gemini_call_purpose,
@@ -143,6 +150,7 @@ async def run_agent_events(
             "gemini_call_purpose": gemini_call_purpose,
             "ticket_id": ticket.ticket_id,
             "session_id": session_id,
+            "phoenixloop_cycle_id": cycle_id,
         },
     )
 
@@ -156,6 +164,7 @@ async def run_agent_events(
             "prompt_version_id": prompt_version_id or "fallback",
             "prompt_version_label": prompt_version_label,
             "gemini_call_purpose": gemini_call_purpose,
+            "phoenixloop_cycle_id": cycle_id,
         },
         tags=["support-agent", ticket.category.value],
     ):
@@ -339,6 +348,7 @@ async def run_agent(
     prompt_override: str | None = None,
     prompt_version_label: str = "production",
     gemini_call_purpose: str = "support_agent_response",
+    phoenixloop_cycle_id: str | None = None,
 ) -> AgentRun:
     """Run the support agent on a ticket and return an AgentRun record.
 
@@ -349,6 +359,11 @@ async def run_agent(
     prompt lookup and ``gemini_call_purpose='experiment_baseline'`` (or
     ``'experiment_candidate'``) so the per-purpose token accounting in the
     logs stays accurate.
+
+    ``phoenixloop_cycle_id`` lets an orchestrator (healing-loop runner,
+    experiment driver) tag every span in one logical cycle with the same
+    id. Leave ``None`` to fall back to ``session_id`` — see
+    :func:`run_agent_events` for the rationale.
     """
     async for event in run_agent_events(
         ticket,
@@ -359,6 +374,7 @@ async def run_agent(
         prompt_override=prompt_override,
         prompt_version_label=prompt_version_label,
         gemini_call_purpose=gemini_call_purpose,
+        phoenixloop_cycle_id=phoenixloop_cycle_id,
     ):
         if event["type"] == "agent_done":
             return event["agent_run"]

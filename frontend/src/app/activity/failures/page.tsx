@@ -10,6 +10,7 @@ import { Eyebrow } from "@/components/ui/eyebrow";
 import { CodeInline } from "@/components/ui/code-inline";
 import { StatusDot } from "@/components/ui/status-dot";
 import { Tag } from "@/components/ui/tag";
+import { EmptyState } from "@/components/shared/empty-state";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import type { FailureAggregate } from "@/lib/types";
@@ -142,7 +143,10 @@ export default function FailuresPage() {
           {loading ? (
             <div className="px-4 py-10 text-body-sm text-mute">Loading failures…</div>
           ) : failures.length === 0 ? (
-            <EmptyFailureState onGo={() => router.push("/conversation")} />
+            <EmptyState
+              title="No failures yet"
+              description="Failures appear here when evaluators score a run below threshold. Run seed to populate."
+            />
           ) : (
             <ul role="list" className="divide-y divide-hairline">
               {failures.map((f) => {
@@ -300,7 +304,7 @@ function FailureDetail({
             </>
           ) : (
             <>
-              Diagnose via Phoenix
+              Read failing spans via Phoenix MCP
               <ArrowRight className="h-3.5 w-3.5" />
             </>
           )}
@@ -315,21 +319,6 @@ function DetailCell({ label, value }: { label: string; value: React.ReactNode })
     <div className="bg-canvas px-5 py-3">
       <div className="text-caption uppercase tracking-eyebrow text-mute">{label}</div>
       <div className="mt-1 text-body-md text-ink">{value}</div>
-    </div>
-  );
-}
-
-function EmptyFailureState({ onGo }: { onGo: () => void }) {
-  return (
-    <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
-      <span className="font-mono text-code text-mute">/api/failures?active_only=true</span>
-      <p className="max-w-[44ch] text-body-sm text-body">
-        No active failure aggregates yet. The seed produces two so the loop fires on first boot.
-      </p>
-      <Button variant="outline" size="sm" onClick={onGo}>
-        Open conversation
-        <ArrowRight className="h-3.5 w-3.5" />
-      </Button>
     </div>
   );
 }

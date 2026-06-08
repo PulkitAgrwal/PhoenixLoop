@@ -575,13 +575,18 @@ async def full_loop_stream(
     from src.db import get_db
 
     mcp_toolset = getattr(request.app.state, "phoenix_mcp_toolset", None)
+    diagnosis_mcp_toolset = getattr(request.app.state, "diagnosis_mcp_toolset", None)
     settings = get_settings()
     db_path = settings.database_url.replace("sqlite:///", "")
 
     async def event_gen():
         try:
             async with get_db(db_path) as db:
-                async for name, payload in stream_full_loop(db, mcp_toolset=mcp_toolset):
+                async for name, payload in stream_full_loop(
+                    db,
+                    mcp_toolset=mcp_toolset,
+                    diagnosis_mcp_toolset=diagnosis_mcp_toolset,
+                ):
                     frame = {"type": name, **payload}
                     yield f"data: {json.dumps(frame)}\n\n"
             yield 'data: {"type":"done"}\n\n'

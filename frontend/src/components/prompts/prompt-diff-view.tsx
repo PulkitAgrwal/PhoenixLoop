@@ -5,7 +5,6 @@ import { Copy } from "lucide-react";
 import { createTwoFilesPatch } from "diff";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { PromptDiffUnified } from "./prompt-diff-unified";
 import { PromptDiffAnnotated } from "./prompt-diff-annotated";
 
@@ -58,14 +57,14 @@ export function PromptDiffView({
         )}
       </div>
       <TabsContent value="diff">
-        <ScrollArea className="max-h-[400px] rounded-md border bg-muted/20 p-2">
+        <div className="max-h-[400px] overflow-y-auto rounded-md border bg-muted/20 p-2">
           <PromptDiffUnified baseline={baseline} candidate={candidate} />
-        </ScrollArea>
+        </div>
       </TabsContent>
       <TabsContent value="full">
-        <ScrollArea className="max-h-[400px] rounded-md border bg-muted/20 p-2">
+        <div className="max-h-[400px] overflow-y-auto rounded-md border bg-muted/20 p-2">
           <PromptDiffAnnotated baseline={baseline} candidate={candidate} />
-        </ScrollArea>
+        </div>
       </TabsContent>
     </Tabs>
   );
