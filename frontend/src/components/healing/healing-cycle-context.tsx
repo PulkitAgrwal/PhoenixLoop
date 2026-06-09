@@ -295,9 +295,33 @@ export function useHealingCycle(): HealingCycleContextValue {
   return ctx;
 }
 
+// Some stages are reached by a failure event instead of the happy-path
+// event. Both should mark the stage "reached" so the modal can advance.
+// The accompanying failedStages set lets the modal render a fail tone.
+const FAIL_TO_STAGE: Record<string, string> = {
+  agent_failed: "agent_run_completed",
+  evals_failed: "evals_completed",
+  aggregation_failed: "trigger_fired",
+  experiment_failed: "experiment_completed",
+  release_gate_failed: "release_gate_decided",
+};
+
 export function reachedStages(events: HealingEvent[]): Set<string> {
   const set = new Set<string>();
-  for (const e of events) set.add(e.type);
+  for (const e of events) {
+    set.add(e.type);
+    const aliased = FAIL_TO_STAGE[e.type];
+    if (aliased) set.add(aliased);
+  }
+  return set;
+}
+
+export function failedStages(events: HealingEvent[]): Set<string> {
+  const set = new Set<string>();
+  for (const e of events) {
+    const aliased = FAIL_TO_STAGE[e.type];
+    if (aliased) set.add(aliased);
+  }
   return set;
 }
 
