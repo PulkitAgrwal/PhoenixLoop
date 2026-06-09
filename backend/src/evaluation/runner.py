@@ -106,6 +106,8 @@ async def _run_code_eval(
                 outcome="error",
                 explanation=f"Evaluator failed: {exc}",
                 annotation_level=evaluator.annotation_level,
+                rubric_version=None,
+                evidence=[],
             )
         ]
     return [result] if isinstance(result, EvalOutput) else list(result)
@@ -133,13 +135,20 @@ async def _run_combined_eval(
                 outcome="error",
                 explanation=f"Combined evaluator crashed: {exc}",
                 annotation_level="span",
+                rubric_version=None,
+                evidence=[],
             )
             for output_name in evaluator.output_names
         ]
 
 
 def _output_to_eval_result(output: EvalOutput, agent_run: AgentRun) -> EvalResult:
-    """Convert an EvalOutput dataclass into a persisted EvalResult model."""
+    """Convert an EvalOutput dataclass into a persisted EvalResult model.
+
+    Threads ``rubric_version`` and ``evidence`` from the evaluator onto
+    the persisted row so the eval payload schema is uniform across code
+    and LLM-judge evaluators.
+    """
     return EvalResult(
         eval_result_id=str(uuid.uuid4()),
         agent_run_id=agent_run.agent_run_id,
@@ -153,6 +162,8 @@ def _output_to_eval_result(output: EvalOutput, agent_run: AgentRun) -> EvalResul
         annotation_level=AnnotationLevel(output.annotation_level),
         span_id=agent_run.root_span_id,
         created_at=datetime.now(timezone.utc).isoformat(),
+        rubric_version=output.rubric_version,
+        evidence_json=list(output.evidence),
     )
 
 
@@ -166,7 +177,9 @@ def _write_annotation(
         return
 
     label = output.outcome
-    score = output.score
+    # Annotation API expects a numeric score; surface abstain as None-safe 0.0
+    # to keep the existing Phoenix payload shape unchanged.
+    score = output.score if output.score is not None else 0.0
     explanation = output.explanation or ""
 
     if output.annotation_level == "span":

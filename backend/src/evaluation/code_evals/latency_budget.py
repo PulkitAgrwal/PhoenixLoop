@@ -24,6 +24,10 @@ class LatencyBudgetEvaluator(BaseEvaluator):
     def annotation_level(self) -> str:
         return "span"
 
+    @property
+    def rubric_version(self) -> str:
+        return "latency_budget_v1"
+
     async def evaluate(self, agent_run: AgentRun, ticket: SupportTicket) -> EvalOutput:
         """Verify latency is within budget."""
         settings = get_settings()
@@ -46,7 +50,14 @@ class LatencyBudgetEvaluator(BaseEvaluator):
                 agent_run.agent_run_id,
                 explanation,
             )
-            return self._make_failure_output(summary, explanation)
+            return self._make_failure_output(
+                summary,
+                explanation,
+                evidence=[
+                    f"observed_latency_ms={actual_ms}",
+                    f"budget_ms={budget_ms}",
+                ],
+            )
 
         return self._make_pass_output(
             f"Latency {actual_ms}ms is within budget of {budget_ms}ms."

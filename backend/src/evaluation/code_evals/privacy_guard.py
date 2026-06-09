@@ -38,6 +38,10 @@ class PrivacyGuardEvaluator(BaseEvaluator):
     def annotation_level(self) -> str:
         return "span"
 
+    @property
+    def rubric_version(self) -> str:
+        return "privacy_guard_v1"
+
     async def evaluate(self, agent_run: AgentRun, ticket: SupportTicket) -> EvalOutput:
         """Detect potential PII from other customers in the response."""
         answer = agent_run.response_json.get("answer", "")
@@ -90,6 +94,8 @@ class PrivacyGuardEvaluator(BaseEvaluator):
                 agent_run.agent_run_id,
                 explanation,
             )
-            return self._make_failure_output(summary, explanation)
+            return self._make_failure_output(
+                summary, explanation, evidence=violations
+            )
 
         return self._make_pass_output("No PII leakage detected in response.")

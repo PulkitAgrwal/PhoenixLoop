@@ -37,7 +37,6 @@ def test_combined_prompt_embeds_phoenix_templates() -> None:
         ticket_body="body",
         response_text="resp",
         tool_outputs="outputs",
-        pass_threshold=0.7,
     )
     assert "HALLUCINATION_PROMPT_TEMPLATE" in rendered
     assert "QA_PROMPT_TEMPLATE" in rendered
@@ -54,10 +53,33 @@ def test_custom_judges_remain_in_place() -> None:
         ticket_body="body",
         response_text="resp",
         tool_outputs="outputs",
-        pass_threshold=0.7,
     )
-    assert "Refund Policy" in rendered
-    assert "Escalation Policy" in rendered
-    assert "Privacy Policy" in rendered
+    # The 5-section template names each judge explicitly. Policy_compliance
+    # and safety_privacy carry the domain-specific rules (refund_eligible,
+    # [POL-XXX] citations, other-customer PII) that Phoenix's generic
+    # templates can't encode.
+    assert "policy_compliance" in rendered
     assert "safety_privacy" in rendered
-    assert "fabricated policy" in rendered
+    assert "refund_eligible" in rendered
+    assert "fabricates a policy" in rendered or "fabricated" in rendered.lower()
+    # Categorical labels — no numeric scoring scale.
+    assert "insufficient_evidence" in rendered
+    assert "pass" in rendered
+    assert "fail" in rendered
+
+
+def test_prompt_uses_5_section_template() -> None:
+    """Each judge follows the 5-section template (target / inputs / labels / rules / examples)."""
+    rendered = EVAL_PROMPT_TEMPLATE.format(
+        ticket_category="refund",
+        ticket_customer_id="cus_5WvnX4nq",
+        ticket_body="body",
+        response_text="resp",
+        tool_outputs="outputs",
+    )
+    # Each numbered subsection appears 4 times (one per judge).
+    assert rendered.count("### 1. Evaluation target") == 4
+    assert rendered.count("### 2. Inputs") == 4
+    assert rendered.count("### 3. Labels") == 4
+    assert rendered.count("### 4. Decision rules") == 4
+    assert rendered.count("### 5. Examples") == 4

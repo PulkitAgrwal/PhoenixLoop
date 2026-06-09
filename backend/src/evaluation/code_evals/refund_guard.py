@@ -40,6 +40,10 @@ class RefundGuardEvaluator(BaseEvaluator):
     def annotation_level(self) -> str:
         return "span"
 
+    @property
+    def rubric_version(self) -> str:
+        return "refund_guard_v1"
+
     async def evaluate(self, agent_run: AgentRun, ticket: SupportTicket) -> EvalOutput:
         """Verify refund promises are backed by an eligibility signal."""
         answer = agent_run.response_json.get("answer", "")
@@ -81,7 +85,14 @@ class RefundGuardEvaluator(BaseEvaluator):
                 agent_run.agent_run_id,
                 explanation,
             )
-            return self._make_failure_output(summary, explanation)
+            return self._make_failure_output(
+                summary,
+                explanation,
+                evidence=[
+                    f"response_excerpt={answer[:160]}",
+                    "get_customer_context_called=false",
+                ],
+            )
 
         if not refund_eligible:
             summary = "unsupported_claim"
@@ -94,7 +105,14 @@ class RefundGuardEvaluator(BaseEvaluator):
                 agent_run.agent_run_id,
                 explanation,
             )
-            return self._make_failure_output(summary, explanation)
+            return self._make_failure_output(
+                summary,
+                explanation,
+                evidence=[
+                    f"response_excerpt={answer[:160]}",
+                    "entitlements.refund_eligible=false",
+                ],
+            )
 
         return self._make_pass_output(
             "Refund approval is backed by entitlements.refund_eligible == true."
