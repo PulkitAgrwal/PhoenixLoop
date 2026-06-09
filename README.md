@@ -144,6 +144,21 @@ flowchart LR
 
 </details>
 
+### Proof — the live Phoenix Cloud project
+
+<p align="center">
+  <img src="frontend/public/screenshots/phoenix-cloud-project.png"
+       alt="Live Phoenix Cloud project &quot;phoenixloop&quot; — 763 traces, $5.18 cost, latency p50/p99 visible. The right-hand panel shows real evaluator annotations on every span: groundedness, resolution_grade, latency_budget, citation_presence, refund_guard, tool_sequence, privacy_guard, policy_compliance. The diagnosis sub-agent's invocation span is visible mid-list."
+       width="92%" />
+</p>
+
+What this screenshot shows, in order of importance for the Arize rubric:
+
+- **763 real traces** in the `phoenixloop` project — every agent run, tool call, judge call, MCP call streamed via OTLP/HTTP from the deployed Cloud Run backend. Not seeded fixtures.
+- **The right-hand panel lists eight evaluator annotations per span** — `groundedness`, `resolution_grade`, `latency_budget`, `citation_presence`, `refund_guard`, `tool_sequence`, `privacy_guard`, `policy_compliance` — written back via `client.spans.log_span_annotations()` from `backend/src/evaluation/runner.py:170-202`.
+- **The `invocation [phoenixloop_diagnosis_a…]` span** is the diagnosis sub-agent running with Phoenix MCP as its only tool surface. The spans nested under it are the agent's own `phoenix-mcp:` calls — visual proof that the agent reads its own observability data at runtime.
+- **$5.18 total cost** for 763 traces — the combined-judge trick (4 judges into 1 Gemini call) keeping the loop under the free-tier 5 RPM ceiling.
+
 The single architectural rule: **anything the agent reads on the hot path lives in the local SQLite mirror.** Phoenix is the observability surface and the experiment runtime — not the configuration store. If Phoenix is unreachable, the agent keeps answering tickets; the loop just doesn't advance until Phoenix comes back.
 
 ---
