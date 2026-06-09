@@ -27,10 +27,18 @@ import uuid
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from google.genai import types
+from pydantic import BaseModel, Field
 
 from src.config import get_settings
 from src.tracing.phoenix_client import get_phoenix_client
+from src.utils.genai_client import make_genai_client
+from src.utils.retry import retry
+
+if TYPE_CHECKING:
+    import aiosqlite
 
 logger = logging.getLogger(__name__)
 
@@ -596,3 +604,217 @@ def create_escalation(ticket_id: str, reason: str, target_team: str) -> dict:
         "reason": reason,
         "status": "created",
     }
+
+
+# ---------------------------------------------------------------------------
+# Diagnosis sub-agent tool: extract_categories
+# ---------------------------------------------------------------------------
+#
+# LLM-driven failure clustering. The diagnosis sub-agent calls this after
+# fetching spans + annotations via Phoenix MCP to ask Gemini for a tight
+# set of mutually exclusive failure categories. The categorization is the
+# evidence the proposal generator hangs the patch off of.
+
+# Token economy: trim each agent_run response + tool-call payload to this
+# many characters before sending to Gemini so the prompt stays small even
+# at 5 examples.
+_EXTRACT_CATEGORIES_RUN_CHAR_BUDGET = 1200
+
+_EXTRACT_CATEGORIES_PROMPT = """\
+You are clustering failures from the Helios support agent into mutually \
+exclusive categories so an engineer can patch the prompt.
+
+## Failure cluster
+- failure_key: {failure_key}
+- runs in cluster: {run_count}
+
+## Per-run evidence (response + tool calls, trimmed)
+{evidence_block}
+
+## Task
+Produce **at most {max_categories}** mutually exclusive failure CATEGORIES \
+that together cover every run above. Each category must be:
+- A short noun phrase that names the *kind* of failure (not a verb).
+- Distinct from every other category in this list — runs should be \
+assignable to exactly one.
+
+For each category, report:
+- ``category``: the noun phrase, max ~10 words.
+- ``count``: how many of the listed runs fall under this category.
+- ``example_run_ids``: up to 3 of the run ids you would point a human at.
+
+Counts across categories must sum to {run_count}.
+
+Respond with JSON only — a list of objects with ``category``, ``count``, \
+``example_run_ids``.
+"""
+
+
+class _CategoryBucket(BaseModel):
+    """Structured-output schema for a single category Gemini returns."""
+
+    category: str = Field(min_length=1, max_length=200)
+    count: int = Field(ge=0)
+    example_run_ids: list[str] = Field(default_factory=list)
+
+
+@retry(
+    max_attempts=3,
+    backoff_base=1.0,
+    retryable_exceptions=(Exception,),
+)
+async def _call_gemini_extract_categories(
+    *, prompt_text: str
+) -> list[_CategoryBucket]:
+    """Single Gemini call returning structured failure categories.
+
+    Logs ``gemini_call_purpose=extract_categories`` so the seed-phase
+    token audit can attribute spend to this tool exactly. Wrapped in
+    ``@retry`` per CLAUDE.md for resilience against transient 5xx /
+    timeout responses.
+    """
+    settings = get_settings()
+    client = make_genai_client()
+    logger.info(
+        "gemini_call_purpose=extract_categories model=%s",
+        settings.gemini_model,
+        extra={"gemini_call_purpose": "extract_categories"},
+    )
+    response = client.models.generate_content(
+        model=settings.gemini_model,
+        contents=prompt_text,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=list[_CategoryBucket],
+        ),
+    )
+    raw = json.loads(response.text)
+    return [_CategoryBucket.model_validate(item) for item in raw]
+
+
+def _trim_for_prompt(value: object, char_budget: int) -> str:
+    """Render an arbitrary JSON-ish value as a trimmed string for the LLM."""
+    if value is None:
+        return ""
+    try:
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        text = str(value)
+    if len(text) <= char_budget:
+        return text
+    return text[: char_budget - 3] + "..."
+
+
+async def extract_categories(
+    failure_key: str,
+    max_categories: int = 5,
+    *,
+    db: "aiosqlite.Connection | None" = None,
+) -> list[dict]:
+    """LLM-driven failure clustering for a given failure_key.
+
+    Fetches the failing ``agent_runs`` that clustered under this
+    ``failure_key`` via the repository layer, then asks Gemini to produce
+    3-5 mutually exclusive failure categories that together cover every
+    run. Returned as a list of ``{category, count, example_run_ids}``
+    dicts so the diagnosis sub-agent can embed the result in its
+    ``evidence_summary``.
+
+    Args:
+        failure_key: The cluster identifier (matches a row in
+            ``failure_aggregates``).
+        max_categories: Cap on how many distinct categories Gemini may
+            return. Defaults to 5 — three to five is the useful range.
+        db: Optional aiosqlite connection. Injected so production code
+            can pass the lifespan-managed session and tests can pass an
+            in-memory DB. When omitted, the function returns an empty
+            list (no DB → no evidence to cluster).
+
+    Returns:
+        A list of dicts shaped like
+        ``[{"category": "...", "count": int, "example_run_ids": [...]}]``.
+        Empty when there is no DB, no aggregate, no runs, or the Gemini
+        call ultimately fails after retries.
+    """
+    if db is None:
+        logger.warning(
+            "extract_categories called without a db connection — returning []. "
+            "Pass the lifespan-managed aiosqlite connection."
+        )
+        return []
+
+    # Local import to avoid hard import-time coupling to the repository
+    # layer for unit tests that exercise this module in isolation.
+    from src.db import get_agent_run, get_failure_aggregate
+
+    aggregate = await get_failure_aggregate(db, failure_key)
+    if aggregate is None:
+        logger.info("extract_categories: no aggregate for %s", failure_key)
+        return []
+
+    run_ids = list(aggregate.example_run_ids_json or [])
+    if not run_ids:
+        logger.info(
+            "extract_categories: aggregate %s has no example run ids",
+            failure_key,
+        )
+        return []
+
+    runs_payload: list[dict] = []
+    for run_id in run_ids:
+        run = await get_agent_run(db, run_id)
+        if run is None:
+            continue
+        runs_payload.append(
+            {
+                "agent_run_id": run.agent_run_id,
+                "response": _trim_for_prompt(
+                    run.response_json, _EXTRACT_CATEGORIES_RUN_CHAR_BUDGET
+                ),
+                "tool_calls": _trim_for_prompt(
+                    [
+                        tc.model_dump() if hasattr(tc, "model_dump") else tc
+                        for tc in run.tool_calls_json
+                    ],
+                    _EXTRACT_CATEGORIES_RUN_CHAR_BUDGET,
+                ),
+            }
+        )
+
+    if not runs_payload:
+        logger.info(
+            "extract_categories: aggregate %s — no runs resolved", failure_key
+        )
+        return []
+
+    evidence_block = "\n\n".join(
+        f"### run {idx + 1}: {payload['agent_run_id']}\n"
+        f"response: {payload['response']}\n"
+        f"tool_calls: {payload['tool_calls']}"
+        for idx, payload in enumerate(runs_payload)
+    )
+    prompt = _EXTRACT_CATEGORIES_PROMPT.format(
+        failure_key=failure_key,
+        run_count=len(runs_payload),
+        max_categories=max(1, min(int(max_categories), 5)),
+        evidence_block=evidence_block,
+    )
+
+    try:
+        buckets = await _call_gemini_extract_categories(prompt_text=prompt)
+    except Exception as exc:
+        logger.error(
+            "extract_categories Gemini call failed for %s: %s",
+            failure_key,
+            exc,
+            exc_info=True,
+        )
+        return []
+
+    result = [b.model_dump() for b in buckets]
+    logger.info(
+        "extract_categories: failure_key=%s produced %d categories",
+        failure_key,
+        len(result),
+    )
+    return result

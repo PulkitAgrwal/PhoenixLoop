@@ -153,18 +153,26 @@ class TestComputeReleaseScore:
 
 class TestCheckPromotionRules:
     def test_all_pass_returns_pending_human_review(self) -> None:
-        """All rules pass => PENDING_HUMAN_REVIEW."""
+        """All rules pass => PENDING_HUMAN_REVIEW.
+
+        With the multi-dimensional gate, the two tool-* rules are skipped
+        whenever the experiment lacks the new metrics — they count as
+        passing for the decision but not for ``promotion_rules_passed``.
+        """
         experiment = _make_experiment()
         result = check_promotion_rules(experiment)
 
         assert result.decision == ReleaseDecision.PENDING_HUMAN_REVIEW
-        assert result.promotion_rules_passed == 6
+        # 6 PRD rules + latency_tier (=== "fast" tier on both sides). The
+        # two tool-* rules are skipped (no baseline data) so they don't
+        # contribute to the passed count.
+        assert result.promotion_rules_passed == 7
         assert result.requires_human_approval is True
         assert result.experiment_id == "EXP-TEST-001"
         assert result.release_score == 0.90
 
-    def test_rules_detail_json_contains_all_six_rules(self) -> None:
-        """rules_detail_json should contain exactly 6 named rules."""
+    def test_rules_detail_json_contains_all_nine_rules(self) -> None:
+        """rules_detail_json should contain the 9 multi-dimensional rules."""
         experiment = _make_experiment()
         result = check_promotion_rules(experiment)
 
@@ -175,11 +183,14 @@ class TestCheckPromotionRules:
             "latency_budget",
             "regression_pass_rate",
             "safety_canary",
+            "tool_call_efficiency",
+            "latency_tier",
+            "tool_adherence",
         }
         assert set(result.rules_detail_json.keys()) == expected_keys
 
     def test_each_rule_has_required_fields(self) -> None:
-        """Every rule entry should have description, threshold, actual, passed."""
+        """Every rule entry should have name, status, required, actual."""
         experiment = _make_experiment()
         result = check_promotion_rules(experiment)
 
@@ -188,6 +199,59 @@ class TestCheckPromotionRules:
             assert "threshold" in rule_data, f"{rule_name} missing 'threshold'"
             assert "actual" in rule_data, f"{rule_name} missing 'actual'"
             assert "passed" in rule_data, f"{rule_name} missing 'passed'"
+            assert "name" in rule_data, f"{rule_name} missing 'name'"
+            assert "status" in rule_data, f"{rule_name} missing 'status'"
+            assert "required" in rule_data, f"{rule_name} missing 'required'"
+            assert rule_data["status"] in {"pass", "fail", "skipped"}
+
+    def test_tool_call_efficiency_skipped_when_baseline_missing(self) -> None:
+        """Rule 7 should be marked skipped when baseline_tool_call_count is None."""
+        experiment = _make_experiment(
+            baseline_tool_call_count=None,
+            candidate_tool_call_count=8.0,
+        )
+        result = check_promotion_rules(experiment)
+        assert result.rules_detail_json["tool_call_efficiency"]["status"] == "skipped"
+
+    def test_tool_call_efficiency_fails_on_inflation(self) -> None:
+        """Rule 7 should fail when candidate calls 2x the baseline tools."""
+        experiment = _make_experiment(
+            baseline_tool_call_count=2.0,
+            candidate_tool_call_count=8.0,  # 4x — way over 1.5x ceiling
+        )
+        result = check_promotion_rules(experiment)
+        assert result.rules_detail_json["tool_call_efficiency"]["status"] == "fail"
+        assert result.decision == ReleaseDecision.REJECTED
+
+    def test_tool_adherence_skipped_when_baseline_missing(self) -> None:
+        """Rule 9 should be marked skipped when baseline_tool_adherence_rate is None."""
+        experiment = _make_experiment(
+            baseline_tool_adherence_rate=None,
+            candidate_tool_adherence_rate=0.95,
+        )
+        result = check_promotion_rules(experiment)
+        assert result.rules_detail_json["tool_adherence"]["status"] == "skipped"
+
+    def test_tool_adherence_fails_below_floor(self) -> None:
+        """Rule 9 should fail when candidate adherence drops below 0.85 floor."""
+        experiment = _make_experiment(
+            baseline_tool_adherence_rate=0.95,
+            candidate_tool_adherence_rate=0.80,
+        )
+        result = check_promotion_rules(experiment)
+        assert result.rules_detail_json["tool_adherence"]["status"] == "fail"
+        assert result.decision == ReleaseDecision.REJECTED
+
+    def test_latency_tier_fails_on_bucket_regression(self) -> None:
+        """Rule 8 should fail when candidate moves to a worse latency tier."""
+        experiment = _make_experiment(
+            baseline_latency_p50_ms=2500,   # fast tier
+            candidate_latency_p50_ms=5000,  # ok tier — bucket regressed
+            baseline_release_score=0.80,
+            candidate_release_score=0.86,   # keep score gate happy
+        )
+        result = check_promotion_rules(experiment)
+        assert result.rules_detail_json["latency_tier"]["status"] == "fail"
 
     def test_critical_failure_blocks(self) -> None:
         """Non-zero critical failure rate => BLOCKED_CRITICAL_FAILURE."""

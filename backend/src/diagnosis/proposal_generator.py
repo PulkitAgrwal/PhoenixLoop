@@ -21,6 +21,7 @@ from src.diagnosis.phoenix_mcp import (
     UpsertResult,
 )
 from src.models import (
+    ChangeClass,
     ImprovementTrigger,
     PatchType,
     PromptSource,
@@ -75,6 +76,12 @@ class PatchProposal(BaseModel):
     proposed_change: str
     diff_summary: str
     insertion_point: str
+    # ``change_class`` taxonomizes the kind of remediation Gemini chose so
+    # the UI can group healing cycles by class. Gemini may return any of
+    # the values in ``ChangeClass`` (the prompt enumerates them). When it
+    # comes back malformed or absent the caller falls back to
+    # ``ChangeClass.PROMPT_ADDITION``.
+    change_class: str | None = None
 
 
 class RegressionTicket(BaseModel):
@@ -110,6 +117,13 @@ Respond with JSON containing:
 - proposed_change: the new text to add to the prompt
 - diff_summary: one-line summary of what changed
 - insertion_point: which section of the prompt to add this to
+- change_class: one of:
+    * "prompt_addition" — added a constraint or clarification to the prompt
+    * "tool_policy" — changed how/when a tool is used
+    * "routing" — changed which tool or category the agent routes to
+    * "data_source" — changed what reference data the prompt or tools read
+    * "eval_definition" — changed an evaluator's rubric or pass criteria
+      (HIGH-RISK: this alters the quality bar itself, so flag it.)
 """
 
 REGRESSION_PROMPT = """Generate {count} synthetic support tickets that specifically test this failure mode.
@@ -191,6 +205,55 @@ async def _call_gemini_regression(prompt_text: str) -> list[RegressionTicket]:
     )
     raw_list = json.loads(response.text)
     return [RegressionTicket.model_validate(item) for item in raw_list]
+
+
+# ---------------------------------------------------------------------------
+# ChangeClass helpers
+# ---------------------------------------------------------------------------
+
+
+# Classes the patch-synthesis prompt is allowed to return. Anything outside
+# this set is coerced to ``PROMPT_ADDITION`` because the historical
+# behaviour was always "append a sentence to the prompt".
+_PROPOSAL_CLASS_ALLOWLIST: set[ChangeClass] = {
+    ChangeClass.PROMPT_ADDITION,
+    ChangeClass.TOOL_POLICY,
+    ChangeClass.ROUTING,
+    ChangeClass.DATA_SOURCE,
+    ChangeClass.EVAL_DEFINITION,
+}
+
+_CHANGE_CLASS_LABELS: dict[ChangeClass, str] = {
+    ChangeClass.PROMPT_ADDITION: "Prompt addition",
+    ChangeClass.TOOL_POLICY: "Tool policy",
+    ChangeClass.ROUTING: "Routing",
+    ChangeClass.DATA_SOURCE: "Data source",
+    ChangeClass.EVAL_DEFINITION: "Eval definition (high-risk)",
+    ChangeClass.MANUAL_EDIT: "Manual edit",
+    ChangeClass.SEED: "Seed",
+}
+
+
+def _resolve_change_class(raw: str | None) -> ChangeClass:
+    """Parse a raw class string from Gemini into a ``ChangeClass`` enum.
+
+    Returns ``ChangeClass.PROMPT_ADDITION`` when ``raw`` is missing,
+    malformed, or names a class outside the proposal allowlist.
+    """
+    if not raw:
+        return ChangeClass.PROMPT_ADDITION
+    try:
+        cls = ChangeClass(raw.strip().lower())
+    except ValueError:
+        return ChangeClass.PROMPT_ADDITION
+    if cls not in _PROPOSAL_CLASS_ALLOWLIST:
+        return ChangeClass.PROMPT_ADDITION
+    return cls
+
+
+def _change_class_label(cls: ChangeClass) -> str:
+    """Human-readable label for the UI badge."""
+    return _CHANGE_CLASS_LABELS.get(cls, cls.value.replace("_", " ").title())
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +359,23 @@ async def generate_proposal(
         proposal = await _call_gemini_patch(prompt)
         result = proposal.model_dump()
 
+        # Resolve change_class — fall back to PROMPT_ADDITION (the existing
+        # one-line-prompt-addition behaviour) when Gemini omits or
+        # mis-labels the field.
+        change_class = _resolve_change_class(proposal.change_class)
+        result["change_class"] = change_class.value
+
+        # ``eval_definition`` is the high-risk class: an eval rubric
+        # change moves the quality bar itself, so surface it for the UI.
+        is_high_risk = change_class == ChangeClass.EVAL_DEFINITION
+        result["is_high_risk"] = is_high_risk
+        result["change_class_label"] = _change_class_label(change_class)
+        if is_high_risk:
+            result["risk_note"] = (
+                "high-risk class — eval definition changes alter quality "
+                "standards"
+            )
+
         # Create candidate prompt version via MCP
         new_prompt_text = _apply_patch(current_prompt, proposal)
         # Surface before/after text so the frontend PromptDiff renderer can
@@ -333,6 +413,7 @@ async def generate_proposal(
                     "patch_type": proposal.patch_type,
                     "diff_summary": proposal.diff_summary,
                 },
+                change_class=change_class,
             )
             await insert_prompt_version(db, local_version)
             result["local_prompt_version_id"] = local_version.prompt_version_id
@@ -349,9 +430,11 @@ async def generate_proposal(
             result["candidate_prompt_version"] = version_result.version_id
 
         logger.info(
-            "Proposal generated for %s: %s",
+            "Proposal generated for %s: %s (change_class=%s, high_risk=%s)",
             trigger.failure_key,
             proposal.diff_summary,
+            change_class.value,
+            is_high_risk,
         )
         return result
 

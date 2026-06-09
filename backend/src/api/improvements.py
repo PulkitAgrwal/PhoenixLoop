@@ -9,7 +9,13 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from src.api.dependencies import PaginationParams, get_db_session, get_request_id
-from src.models import ApiResponse, ImprovementTrigger, PaginatedData, TriggerReason
+from src.models import (
+    ApiResponse,
+    ChangeClass,
+    ImprovementTrigger,
+    PaginatedData,
+    TriggerReason,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +81,19 @@ async def get_improvement(
     request_id: str = Depends(get_request_id),
     db: aiosqlite.Connection = Depends(get_db_session),
 ) -> ApiResponse:
-    """Get an improvement trigger with diagnosis and patch details."""
-    from src.db import get_improvement_trigger, get_regression_examples_for_trigger
+    """Get an improvement trigger with diagnosis and patch details.
+
+    Surfaces ``change_class`` / ``change_class_label`` / ``is_high_risk``
+    pulled from the prompt_version linked to this trigger. ``is_high_risk``
+    is True iff change_class == ``eval_definition``; the frontend renders
+    a warning badge when set.
+    """
+    from src.db import (
+        get_improvement_trigger,
+        get_prompt_version,
+        get_regression_examples_for_trigger,
+        list_prompt_versions,
+    )
 
     trigger = await get_improvement_trigger(db, trigger_id)
     if not trigger:
@@ -85,15 +102,81 @@ async def get_improvement(
         )
 
     regression_examples = await get_regression_examples_for_trigger(db, trigger_id)
+    change_class_info = await _resolve_change_class_for_trigger(
+        trigger, db, get_prompt_version, list_prompt_versions
+    )
 
     return ApiResponse(
         ok=True,
         data={
             "trigger": trigger.model_dump(),
             "regression_examples": [ex.model_dump() for ex in regression_examples],
+            "change_class": change_class_info["change_class"],
+            "change_class_label": change_class_info["change_class_label"],
+            "is_high_risk": change_class_info["is_high_risk"],
         },
         request_id=request_id,
     )
+
+
+_CHANGE_CLASS_LABELS: dict[ChangeClass, str] = {
+    ChangeClass.PROMPT_ADDITION: "Prompt addition",
+    ChangeClass.TOOL_POLICY: "Tool policy",
+    ChangeClass.ROUTING: "Routing",
+    ChangeClass.DATA_SOURCE: "Data source",
+    ChangeClass.EVAL_DEFINITION: "Eval definition (high-risk)",
+    ChangeClass.MANUAL_EDIT: "Manual edit",
+    ChangeClass.SEED: "Seed",
+}
+
+
+async def _resolve_change_class_for_trigger(
+    trigger: ImprovementTrigger,
+    db: aiosqlite.Connection,
+    get_prompt_version,
+    list_prompt_versions,
+) -> dict[str, object]:
+    """Look up the change_class for the prompt_version linked to a trigger.
+
+    Resolution order:
+      1. ``trigger.patch_proposal_json['local_prompt_version_id']`` →
+         direct PromptVersion lookup (the post-spec-0 happy path).
+      2. Fallback: scan recent ``support-agent`` versions and find one
+         whose ``improvement_trigger_id`` matches.
+
+    Returns a dict with ``change_class`` (raw enum value or None),
+    ``change_class_label`` (human-readable), and ``is_high_risk`` (bool).
+    """
+    version_id = None
+    if trigger.patch_proposal_json:
+        version_id = trigger.patch_proposal_json.get("local_prompt_version_id")
+
+    version = None
+    if version_id:
+        version = await get_prompt_version(db, str(version_id))
+    if version is None:
+        # Fallback: scan recent versions and filter on trigger linkage.
+        versions = await list_prompt_versions(db, "support-agent", limit=200)
+        for v in versions:
+            if v.improvement_trigger_id == trigger.improvement_trigger_id:
+                version = v
+                break
+
+    if version is None or version.change_class is None:
+        return {
+            "change_class": None,
+            "change_class_label": "Unknown",
+            "is_high_risk": False,
+        }
+
+    cls = version.change_class
+    return {
+        "change_class": cls.value,
+        "change_class_label": _CHANGE_CLASS_LABELS.get(
+            cls, cls.value.replace("_", " ").title()
+        ),
+        "is_high_risk": cls == ChangeClass.EVAL_DEFINITION,
+    }
 
 
 @router.post("/improvements", status_code=201)
@@ -175,6 +258,7 @@ async def analyze_improvement(
             diagnosis_mcp_toolset or mcp_toolset,
             phoenixloop_cycle_id=trigger.improvement_trigger_id,
             example_trace_ids=example_trace_ids,
+            db=db,
         )
         # ``mcp_status == "agent_fallback"`` means the agent path ran but
         # didn't produce usable structured output — drop to the legacy
@@ -285,6 +369,44 @@ async def generate_regressions(
         ok=True,
         data=[ex.model_dump() for ex in examples],
         request_id=request_id,
+    )
+
+
+@router.post("/improvements/{trigger_id}/actions/auto-promote-failures")
+async def auto_promote_failures(
+    trigger_id: str,
+    request_id: str = Depends(get_request_id),
+    db: aiosqlite.Connection = Depends(get_db_session),
+) -> ApiResponse:
+    """Promote a trigger's example_run_ids to regression_examples on demand.
+
+    Idempotent — re-running on a trigger that already has regression rows
+    is a no-op (returns ``promoted=0``). Used for triggers that pre-date
+    the auto-promote-on-threshold-trip pipeline, or to manually backfill
+    a trigger after a failed promotion attempt.
+
+    Returns ``{"promoted": int}`` indicating how many new regression rows
+    were inserted by this call.
+    """
+    from src.db import get_improvement_trigger
+    from src.diagnosis.failure_aggregator import (
+        auto_promote_trigger_to_regression_examples,
+    )
+
+    trigger = await get_improvement_trigger(db, trigger_id)
+    if not trigger:
+        return ApiResponse(
+            ok=False, error="Improvement trigger not found", request_id=request_id
+        )
+
+    promoted = await auto_promote_trigger_to_regression_examples(trigger, db)
+    logger.info(
+        "Manual auto-promote on trigger %s: promoted %d examples",
+        trigger_id,
+        promoted,
+    )
+    return ApiResponse(
+        ok=True, data={"promoted": promoted}, request_id=request_id
     )
 
 

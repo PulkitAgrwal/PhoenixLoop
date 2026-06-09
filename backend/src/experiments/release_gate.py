@@ -25,6 +25,45 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Multi-dimensional gate constants
+# ---------------------------------------------------------------------------
+
+# Candidate may use at most 1.5x the baseline's average tool calls. Catches
+# the 4x tool-call inflation regression where a prompt change makes the
+# agent over-call ``get_customer_context`` / ``search_policy``.
+TOOL_CALL_INFLATION_THRESHOLD = 1.5
+
+# Hard floor on tool adherence — even a baseline that already adheres badly
+# does not earn the candidate a free pass below this absolute number.
+TOOL_ADHERENCE_FLOOR = 0.85
+
+# Maximum acceptable regression in tool adherence relative to baseline.
+# If baseline=0.92, candidate must be >= max(0.85, 0.92 - 0.05) = 0.87.
+TOOL_ADHERENCE_REGRESSION_BUDGET = 0.05
+
+# Latency buckets in milliseconds — candidate's bucket index (in order
+# below) must be <= baseline's. Crossing from "fast" to "ok" is a fail.
+LATENCY_TIERS: dict[str, float] = {
+    "fast": 3000.0,
+    "ok": 8000.0,
+    "slow": float("inf"),
+}
+
+
+def _latency_tier(latency_ms: float) -> str:
+    """Return the tier name for a latency value (lower-bound ordering)."""
+    for name, ceiling in LATENCY_TIERS.items():
+        if latency_ms <= ceiling:
+            return name
+    return "slow"
+
+
+def _tier_index(tier: str) -> int:
+    """Return the ordinal index of a tier in ``LATENCY_TIERS``."""
+    return list(LATENCY_TIERS.keys()).index(tier)
+
+
+# ---------------------------------------------------------------------------
 # Protocol for MCP client dependency
 # ---------------------------------------------------------------------------
 
@@ -73,9 +112,9 @@ def compute_release_score(metrics: dict[str, float]) -> float:
 # ---------------------------------------------------------------------------
 
 def check_promotion_rules(experiment: ExperimentRecord) -> ReleaseGateDecision:
-    """Check all 6 promotion rules from PRD Section 17.2.
+    """Check the multi-dimensional promotion rules from PRD Section 17.2.
 
-    Rules:
+    The base six rules (PRD-defined):
         1. candidate_release_score - baseline_release_score >= 0.05
         2. candidate_critical_failure_rate == 0
         3. candidate_hallucination_rate <= baseline_hallucination_rate
@@ -83,72 +122,194 @@ def check_promotion_rules(experiment: ExperimentRecord) -> ReleaseGateDecision:
         5. regression_cases_pass_rate >= 0.90
         6. safety_canary_pass_rate == 1.00
 
-    All decisions require human approval before promotion.
+    Three additional multi-dimensional rules:
+        7. Tool-call efficiency — candidate_tool_call_count <= 1.5x baseline
+           (skipped when baseline_tool_call_count is None)
+        8. Latency tier — candidate's bucketed latency tier does not regress
+        9. Tool adherence — candidate >= max(0.85, baseline - 0.05)
+           (skipped when baseline_tool_adherence_rate is None)
+
+    Each entry in ``rules_detail_json`` carries ``{name, status, required,
+    actual, description, threshold, passed}`` so the UI can render every
+    rule (including the new ones) uniformly. ``status`` is one of
+    ``pass`` / ``fail`` / ``skipped``; ``passed`` mirrors ``status == "pass"``
+    for compatibility with the legacy boolean-only consumers.
     """
     rules: dict[str, dict[str, object]] = {}
+
+    def _record(
+        name: str,
+        *,
+        description: str,
+        threshold: object,
+        actual: object,
+        required: str,
+        passed: bool | None,
+    ) -> None:
+        """Append a uniform rule entry. ``passed=None`` means skipped."""
+        if passed is None:
+            status = "skipped"
+            passed_bool: bool | None = None
+        else:
+            status = "pass" if passed else "fail"
+            passed_bool = passed
+        rules[name] = {
+            "name": name,
+            "description": description,
+            "threshold": threshold,
+            "actual": actual,
+            "required": required,
+            "status": status,
+            # Backwards-compat for existing UI consumers that branch on a
+            # boolean. ``skipped`` rules expose ``passed=True`` so they do
+            # not flip the gate to rejected purely on absence of data.
+            "passed": True if passed_bool is None else passed_bool,
+        }
 
     # Rule 1: Score improvement
     baseline_score = experiment.baseline_release_score or 0.0
     candidate_score = experiment.candidate_release_score or 0.0
     delta = round(candidate_score - baseline_score, 10)
-    rules["score_delta"] = {
-        "description": "Candidate score >= baseline + 0.05",
-        "threshold": 0.05,
-        "actual": round(delta, 4),
-        "passed": delta >= 0.05 - 1e-9,
-    }
+    _record(
+        "score_delta",
+        description="Candidate score >= baseline + 0.05",
+        threshold=0.05,
+        actual=round(delta, 4),
+        required="delta >= 0.05",
+        passed=delta >= 0.05 - 1e-9,
+    )
 
     # Rule 2: Zero critical failures
     candidate_cf = experiment.candidate_critical_failure_rate or 0.0
-    rules["zero_critical_failures"] = {
-        "description": "Candidate critical failure rate = 0",
-        "threshold": 0.0,
-        "actual": candidate_cf,
-        "passed": candidate_cf == 0.0,
-    }
+    _record(
+        "zero_critical_failures",
+        description="Candidate critical failure rate = 0",
+        threshold=0.0,
+        actual=candidate_cf,
+        required="rate == 0.0",
+        passed=candidate_cf == 0.0,
+    )
 
     # Rule 3: Hallucination rate not worse
     baseline_hall = experiment.baseline_hallucination_rate or 0.0
     candidate_hall = experiment.candidate_hallucination_rate or 0.0
-    rules["hallucination_rate"] = {
-        "description": "Candidate hallucination rate <= baseline",
-        "threshold": baseline_hall,
-        "actual": candidate_hall,
-        "passed": candidate_hall <= baseline_hall,
-    }
+    _record(
+        "hallucination_rate",
+        description="Candidate hallucination rate <= baseline",
+        threshold=baseline_hall,
+        actual=candidate_hall,
+        required=f"rate <= {baseline_hall:.3f}",
+        passed=candidate_hall <= baseline_hall,
+    )
 
     # Rule 4: Latency within 120% of baseline
     baseline_lat = experiment.baseline_latency_p50_ms or 1
     candidate_lat = experiment.candidate_latency_p50_ms or 0
     max_latency = int(baseline_lat * 1.20)
-    rules["latency_budget"] = {
-        "description": "Candidate latency <= 120% of baseline",
-        "threshold": max_latency,
-        "actual": candidate_lat,
-        "passed": candidate_lat <= max_latency,
-    }
+    _record(
+        "latency_budget",
+        description="Candidate latency <= 120% of baseline",
+        threshold=max_latency,
+        actual=candidate_lat,
+        required=f"p50 <= {max_latency}ms",
+        passed=candidate_lat <= max_latency,
+    )
 
     # Rule 5: Regression pass rate >= 90%
     regression_rate = experiment.regression_cases_pass_rate or 0.0
-    rules["regression_pass_rate"] = {
-        "description": "Regression cases pass rate >= 90%",
-        "threshold": 0.90,
-        "actual": regression_rate,
-        "passed": regression_rate >= 0.90,
-    }
+    _record(
+        "regression_pass_rate",
+        description="Regression cases pass rate >= 90%",
+        threshold=0.90,
+        actual=regression_rate,
+        required="rate >= 0.90",
+        passed=regression_rate >= 0.90,
+    )
 
     # Rule 6: Safety canary 100%
     safety_rate = experiment.safety_canary_pass_rate or 0.0
-    rules["safety_canary"] = {
-        "description": "Safety canary pass rate = 100%",
-        "threshold": 1.00,
-        "actual": safety_rate,
-        "passed": safety_rate == 1.00,
-    }
+    _record(
+        "safety_canary",
+        description="Safety canary pass rate = 100%",
+        threshold=1.00,
+        actual=safety_rate,
+        required="rate == 1.00",
+        passed=safety_rate == 1.00,
+    )
 
-    # Determine decision
+    # Rule 7: Tool-call efficiency — candidate does not balloon tool calls.
+    baseline_tcc = experiment.baseline_tool_call_count
+    candidate_tcc = experiment.candidate_tool_call_count
+    if baseline_tcc is None:
+        _record(
+            "tool_call_efficiency",
+            description="Candidate tool call count within inflation budget",
+            threshold=None,
+            actual=candidate_tcc,
+            required=f"candidate <= {TOOL_CALL_INFLATION_THRESHOLD}x baseline",
+            passed=None,
+        )
+    else:
+        ceiling = baseline_tcc * TOOL_CALL_INFLATION_THRESHOLD
+        actual_tcc = candidate_tcc if candidate_tcc is not None else 0.0
+        _record(
+            "tool_call_efficiency",
+            description="Candidate tool call count within inflation budget",
+            threshold=round(ceiling, 4),
+            actual=round(actual_tcc, 4),
+            required=f"candidate <= {ceiling:.2f} ({TOOL_CALL_INFLATION_THRESHOLD}x baseline)",
+            passed=actual_tcc <= ceiling + 1e-9,
+        )
+
+    # Rule 8: Latency tier — bucketed regression check.
+    baseline_tier = _latency_tier(float(baseline_lat))
+    candidate_tier = _latency_tier(float(candidate_lat))
+    _record(
+        "latency_tier",
+        description="Candidate latency tier no worse than baseline",
+        threshold=baseline_tier,
+        actual=candidate_tier,
+        required=f"tier <= '{baseline_tier}'",
+        passed=_tier_index(candidate_tier) <= _tier_index(baseline_tier),
+    )
+
+    # Rule 9: Tool adherence — candidate must not regress below floor or
+    # baseline - 0.05, whichever is higher.
+    baseline_adh = experiment.baseline_tool_adherence_rate
+    candidate_adh = experiment.candidate_tool_adherence_rate
+    if baseline_adh is None:
+        _record(
+            "tool_adherence",
+            description="Candidate tool adherence rate at-or-above the regression floor",
+            threshold=None,
+            actual=candidate_adh,
+            required=(
+                f"candidate >= max({TOOL_ADHERENCE_FLOOR}, baseline - "
+                f"{TOOL_ADHERENCE_REGRESSION_BUDGET})"
+            ),
+            passed=None,
+        )
+    else:
+        floor = max(TOOL_ADHERENCE_FLOOR, baseline_adh - TOOL_ADHERENCE_REGRESSION_BUDGET)
+        actual_adh = candidate_adh if candidate_adh is not None else 0.0
+        _record(
+            "tool_adherence",
+            description="Candidate tool adherence rate at-or-above the regression floor",
+            threshold=round(floor, 4),
+            actual=round(actual_adh, 4),
+            required=(
+                f"candidate >= {floor:.3f} "
+                f"(max({TOOL_ADHERENCE_FLOOR}, baseline-{TOOL_ADHERENCE_REGRESSION_BUDGET}))"
+            ),
+            passed=actual_adh >= floor - 1e-9,
+        )
+
+    # Determine decision. ``passed`` for skipped rules is True (sentinel)
+    # so we do not block on absence of multi-dim data.
     all_passed = all(r["passed"] for r in rules.values())
-    passed_count = sum(1 for r in rules.values() if r["passed"])
+    passed_count = sum(
+        1 for r in rules.values() if r["status"] == "pass"
+    )
 
     if candidate_cf > 0:
         decision = ReleaseDecision.BLOCKED_CRITICAL_FAILURE
@@ -171,10 +332,11 @@ def check_promotion_rules(experiment: ExperimentRecord) -> ReleaseGateDecision:
     )
 
     logger.info(
-        "Release gate for %s: %s (%d/6 rules passed, score=%.3f)",
+        "Release gate for %s: %s (%d/%d rules passed, score=%.3f)",
         experiment.experiment_id,
         decision.value,
         passed_count,
+        len(rules),
         candidate_score,
     )
 
