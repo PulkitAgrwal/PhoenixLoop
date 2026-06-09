@@ -8,10 +8,13 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+# Build context is the project root so we can copy data/ alongside backend/.
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY src/ src/
+COPY backend/src/ src/
+COPY backend/tests/fixtures tests/fixtures
+COPY data /data
 
 RUN mkdir -p /app/db
 

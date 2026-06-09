@@ -8,7 +8,9 @@ steps:
       - build
       - -t
       - gcr.io/$PROJECT_ID/phoenixloop-backend:$SHORT_SHA
-      - ./backend
+      - -f
+      - backend/Dockerfile
+      - .
 
   - name: gcr.io/cloud-builders/docker
     id: build-frontend

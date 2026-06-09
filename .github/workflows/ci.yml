@@ -219,7 +219,8 @@ jobs:
       - name: Backend image (verify only)
         uses: docker/build-push-action@v6
         with:
-          context: ./backend
+          context: .
+          file: backend/Dockerfile
           push: false
           platforms: linux/amd64
           cache-from: type=gha,scope=backend
@@ -269,7 +270,8 @@ jobs:
       - name: Build and push backend image
         uses: docker/build-push-action@v6
         with:
-          context: ./backend
+          context: .
+          file: backend/Dockerfile
           push: true
           platforms: linux/amd64
           tags: |
@@ -284,7 +286,7 @@ jobs:
             --image=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.AR_REPO }}/backend:${{ github.sha }} \
             --region=${{ env.GCP_REGION }} \
             --project=${{ env.GCP_PROJECT }} \
-            --update-env-vars=SKIP_AUTOSEED=false,LIGHTWEIGHT_DEMO=false \
+            --update-env-vars=SKIP_AUTOSEED=false,LIGHTWEIGHT_DEMO=true \
             --quiet
 
       - name: Smoke test /api/health
