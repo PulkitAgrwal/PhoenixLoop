@@ -81,13 +81,14 @@ export function TopNav() {
 
         <div className="flex items-center gap-3">
           <a
-            href="https://github.com"
+            href="https://github.com/PulkitAgrwal/PhoenixLoop"
             target="_blank"
             rel="noreferrer noopener"
+            aria-label="PhoenixLoop on GitHub"
             className="hidden md:inline-flex items-center gap-2 px-3 py-1.5 text-body-sm text-body hover:text-ink rounded-sm border border-hairline"
           >
             <StatusDot tone="brand" size="xs" pulse />
-            <span>Local · live mode</span>
+            <span>GitHub · PhoenixLoop</span>
           </a>
           <button
             type="button"
