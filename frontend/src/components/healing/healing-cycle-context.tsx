@@ -295,9 +295,50 @@ export function useHealingCycle(): HealingCycleContextValue {
   return ctx;
 }
 
+// Some stages are reached by a failure event instead of the happy-path
+// event. Both should mark the stage "reached" so the modal can advance.
+// The accompanying failedStages set lets the modal render a fail tone.
+const FAIL_TO_STAGE: Record<string, string> = {
+  agent_failed: "agent_run_completed",
+  evals_failed: "evals_completed",
+  evals_skipped: "evals_completed",
+  aggregation_failed: "trigger_fired",
+  experiment_failed: "experiment_completed",
+  release_gate_failed: "release_gate_decided",
+};
+
 export function reachedStages(events: HealingEvent[]): Set<string> {
   const set = new Set<string>();
-  for (const e of events) set.add(e.type);
+  for (const e of events) {
+    set.add(e.type);
+    const aliased = FAIL_TO_STAGE[e.type];
+    if (aliased) set.add(aliased);
+  }
+  return set;
+}
+
+export function failedStages(events: HealingEvent[]): Set<string> {
+  // Per-stage counters: any happy-path event "saves" the stage. A stage is
+  // truly failed only if at least one fail event arrived AND zero happy-path
+  // events arrived. This avoids a one-off 429 retry-exhausted on the first
+  // ticket painting the whole "Agent runs" stage red while the remaining 5
+  // tickets succeeded.
+  const okByStage = new Map<string, number>();
+  const failByStage = new Map<string, number>();
+  for (const e of events) {
+    // Happy-path: the event type IS the stage key.
+    okByStage.set(e.type, (okByStage.get(e.type) ?? 0) + 1);
+    const aliased = FAIL_TO_STAGE[e.type];
+    if (aliased) {
+      failByStage.set(aliased, (failByStage.get(aliased) ?? 0) + 1);
+    }
+  }
+  const set = new Set<string>();
+  failByStage.forEach((failCount, stageKey) => {
+    if (failCount > 0 && (okByStage.get(stageKey) ?? 0) === 0) {
+      set.add(stageKey);
+    }
+  });
   return set;
 }
 

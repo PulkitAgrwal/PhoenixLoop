@@ -38,6 +38,10 @@ class CitationPresenceEvaluator(BaseEvaluator):
     def annotation_level(self) -> str:
         return "span"
 
+    @property
+    def rubric_version(self) -> str:
+        return "citation_presence_v1"
+
     async def evaluate(self, agent_run: AgentRun, ticket: SupportTicket) -> EvalOutput:
         """Verify citations are present for policy-related categories."""
         category = ticket.category.value if isinstance(ticket.category, TicketCategory) else ticket.category
@@ -56,6 +60,7 @@ class CitationPresenceEvaluator(BaseEvaluator):
 
         # Policy-related category — check for citations
         citations = agent_run.response_json.get("citations", [])
+        answer = agent_run.response_json.get("answer", "")
 
         if not isinstance(citations, list) or len(citations) == 0:
             summary = "retrieval_miss"
@@ -68,8 +73,17 @@ class CitationPresenceEvaluator(BaseEvaluator):
                 agent_run.agent_run_id,
                 explanation,
             )
-            return self._make_failure_output(summary, explanation)
+            return self._make_failure_output(
+                summary,
+                explanation,
+                evidence=[
+                    f"category={category}",
+                    f"response_excerpt={answer[:120] if isinstance(answer, str) else ''}",
+                    "citations=[]",
+                ],
+            )
 
         return self._make_pass_output(
-            f"Response includes {len(citations)} citation(s) for policy-related category '{category}'."
+            f"Response includes {len(citations)} citation(s) for policy-related category '{category}'.",
+            evidence=[f"citations={citations}"],
         )

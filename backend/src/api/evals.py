@@ -58,6 +58,68 @@ async def get_failure_aggregates(
     )
 
 
+@router.post("/evals/canary/load")
+async def load_canary(
+    request_id: str = Depends(get_request_id),
+    db: aiosqlite.Connection = Depends(get_db_session),
+) -> ApiResponse:
+    """Idempotently load canary_labels.json into the canary_labels table.
+
+    A second call inserts 0 rows. Returns ``{"loaded": int}`` with the
+    count of newly inserted labels.
+    """
+    from src.evaluation.canary import load_canary_fixtures
+
+    try:
+        inserted = await load_canary_fixtures(db)
+    except FileNotFoundError as exc:
+        logger.error("canary fixtures missing: %s", exc)
+        return ApiResponse(ok=False, error=str(exc), request_id=request_id)
+
+    return ApiResponse(
+        ok=True, data={"loaded": inserted}, request_id=request_id
+    )
+
+
+@router.post("/evals/canary/run")
+async def run_canary_endpoint(
+    judge_name: str | None = None,
+    request_id: str = Depends(get_request_id),
+    db: aiosqlite.Connection = Depends(get_db_session),
+) -> ApiResponse:
+    """Run the 4 LLM judges against every canary fixture.
+
+    Slow — ~one Gemini call per fixture (the 4 judges share each call).
+    Optional ``judge_name`` query param scopes the persisted CanaryRun
+    rows to a single judge (the Gemini call is still batched).
+    """
+    from src.evaluation.canary import run_canary
+
+    summary = await run_canary(db, judge_name=judge_name)
+    return ApiResponse(ok=True, data=summary, request_id=request_id)
+
+
+@router.get("/evals/canary/kappa")
+async def get_canary_kappa(
+    request_id: str = Depends(get_request_id),
+    db: aiosqlite.Connection = Depends(get_db_session),
+) -> ApiResponse:
+    """Return Cohen's kappa per judge over the latest canary runs."""
+    from datetime import datetime, timezone
+
+    from src.evaluation.canary import compute_kappa_all_judges
+
+    judges = await compute_kappa_all_judges(db)
+    return ApiResponse(
+        ok=True,
+        data={
+            "judges": judges,
+            "computed_at": datetime.now(timezone.utc).isoformat(),
+        },
+        request_id=request_id,
+    )
+
+
 @router.post("/evals/{agent_run_id}/run")
 async def rerun_evals(
     agent_run_id: str,

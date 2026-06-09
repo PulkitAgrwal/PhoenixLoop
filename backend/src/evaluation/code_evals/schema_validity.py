@@ -23,6 +23,10 @@ class SchemaValidityEvaluator(BaseEvaluator):
     def annotation_level(self) -> str:
         return "span"
 
+    @property
+    def rubric_version(self) -> str:
+        return "schema_validity_v1"
+
     async def evaluate(self, agent_run: AgentRun, ticket: SupportTicket) -> EvalOutput:
         """Check that response_json has all required fields with correct types."""
         response = agent_run.response_json
@@ -66,6 +70,6 @@ class SchemaValidityEvaluator(BaseEvaluator):
             summary = "malformed_output"
             explanation = f"Schema validation failed: {'; '.join(errors)}"
             logger.warning("Schema validity check failed for run %s: %s", agent_run.agent_run_id, explanation)
-            return self._make_failure_output(summary, explanation)
+            return self._make_failure_output(summary, explanation, evidence=errors)
 
         return self._make_pass_output("All required fields present with correct types.")

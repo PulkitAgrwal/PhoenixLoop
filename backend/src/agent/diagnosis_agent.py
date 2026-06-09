@@ -24,7 +24,7 @@ import logging
 import re
 import time
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from google.adk.agents import Agent
 from google.adk.planners import BuiltInPlanner
@@ -36,6 +36,9 @@ from pydantic import BaseModel, Field, ValidationError
 
 from src.config import get_settings
 from src.models import ImprovementTrigger
+
+if TYPE_CHECKING:
+    import aiosqlite
 
 logger = logging.getLogger(__name__)
 
@@ -69,9 +72,8 @@ by a release-gate pipeline.
 
 ## Available tools
 
-Your Phoenix MCP toolset is restricted by the runtime to EXACTLY these \
-five tools — no others are reachable, so do not attempt to call anything \
-else:
+Your Phoenix MCP toolset is restricted by the runtime to these five \
+tools, plus one local clustering helper:
 
 1. **get-spans** — fetch failing spans for a given trace_id or session_id.
    Useful for inspecting tool calls, latencies, errors.
@@ -84,27 +86,38 @@ noisy project before calling get-spans.
 5. **list-experiments-for-dataset** — list past experiments tied to a \
 dataset. Useful when you want to check whether a similar fix has already \
 been A/B-tested and what its scores were.
+6. **extract_categories** — LOCAL tool (not MCP). Given a ``failure_key``, \
+asks Gemini to cluster the runs that fell under that key into 3-5 \
+mutually exclusive failure categories. Call this AFTER you have used \
+``get-spans`` / ``get-span-annotations`` to confirm what the cluster \
+looks like; the categories belong in your ``evidence_summary``.
 
 Prefer the broad list-* tools first to locate signal, then narrow with \
-get-spans and get-span-annotations.
+get-spans and get-span-annotations, then call ``extract_categories`` to \
+crystallize the failure modes.
 
 **Forbidden calls** — never invoke ``list-projects``, ``get-prompt``, \
 ``upsert-prompt``, ``add-prompt-version-tag``, or any tool not in the \
-five listed above. ``list-projects`` in particular fails in this \
+six listed above. ``list-projects`` in particular fails in this \
 pipeline and will drop your confidence to zero. The Phoenix project \
 name you need is supplied directly in the user message — use it.
 
 ## Constraints — read carefully
 
-- Make AT MOST 4 MCP tool calls per diagnosis. We are token-budgeted.
-- **EVERY tool call MUST include the ``projectIdentifier`` argument set \
+- Make AT MOST 3 tool calls total per diagnosis (typically 2 MCP calls \
+plus 1 ``extract_categories``). We are token-budgeted.
+- **EVERY MCP tool call MUST include the ``projectIdentifier`` argument set \
 to the project name from the user message** (e.g. ``projectIdentifier="phoenixloop"``). \
 The Phoenix MCP read tools error out without it. Do not skip the tools \
 on this basis — pass the argument every time.
+- ``extract_categories`` only needs the ``failure_key`` from the user \
+message; no ``projectIdentifier``.
 - After your evidence is gathered, emit your final answer as a single \
 JSON object — no markdown fences, no prose around it.
 - Do not invent evidence. If the MCP calls return nothing useful, say so \
 in ``evidence_summary`` and lower your ``confidence`` accordingly.
+- If ``extract_categories`` returns categories, embed a one-line summary \
+of them inside ``evidence_summary``.
 
 ## Output schema
 
@@ -114,10 +127,10 @@ Your final response MUST be a single JSON object with these fields:
 {
   "failure_pattern": "one-line description of the recurring failure",
   "root_cause": "underlying reason — what's wrong with the prompt, tool, or data flow",
-  "evidence_summary": "1-3 sentence summary of what you saw in spans/annotations",
+  "evidence_summary": "1-3 sentence summary of what you saw in spans/annotations + categories from extract_categories",
   "confidence": 0.0,
   "suggested_fix": "the smallest prompt change that would address this",
-  "mcp_tools_used": ["get-spans", "get-span-annotations"]
+  "mcp_tools_used": ["get-spans", "get-span-annotations", "extract_categories"]
 }
 ```
 
@@ -129,13 +142,23 @@ Confidence rubric:
 """
 
 
-def create_diagnosis_agent(mcp_toolset: Any | None) -> Agent:
+def create_diagnosis_agent(
+    mcp_toolset: Any | None,
+    *,
+    db: "aiosqlite.Connection | None" = None,
+) -> Agent:
     """Build the diagnosis ADK agent.
 
     ``mcp_toolset`` is the lifespan-managed Phoenix MCP toolset from
     ``app.state.phoenix_mcp_toolset``. When ``None`` the agent is built
     with no tools — useful only for unit tests; the caller should fall
     back to the service-side ``diagnose()`` path instead.
+
+    ``db`` is the aiosqlite connection. When supplied, the ``extract_categories``
+    tool is wired in as a closure so the model can call it without
+    knowing about the DB session. The field name is kept identical to
+    ``src.agent.tools.extract_categories`` so the frontend's
+    ``mcp_tools_used`` checklist matches.
     """
     tools: list = []
     if mcp_toolset is not None:
@@ -145,9 +168,40 @@ def create_diagnosis_agent(mcp_toolset: Any | None) -> Agent:
         )
     else:
         logger.warning(
-            "Diagnosis agent has NO tools (no MCP toolset). "
+            "Diagnosis agent has NO Phoenix MCP toolset. "
             "Output will be a degenerate guess from the failure_key alone."
         )
+
+    if db is not None:
+        from src.agent.tools import extract_categories as _extract_categories_impl
+
+        async def extract_categories(
+            failure_key: str, max_categories: int = 5
+        ) -> list[dict]:
+            """Cluster failed runs under a failure_key into mutually exclusive
+            categories using an LLM call.
+
+            Call this AFTER inspecting spans + annotations via Phoenix MCP.
+            Pass the ``failure_key`` exactly as it appears in the user message.
+
+            Args:
+                failure_key: The cluster identifier from the user message
+                    (e.g. ``"missing_required_tool::lookup_order"``).
+                max_categories: Cap on the number of categories returned
+                    (3-5 is the useful range; 5 is the hard ceiling).
+
+            Returns:
+                A list of dicts of shape
+                ``{"category": str, "count": int, "example_run_ids": [str]}``.
+            """
+            return await _extract_categories_impl(
+                failure_key=failure_key,
+                max_categories=max_categories,
+                db=db,
+            )
+
+        tools.append(extract_categories)
+        logger.debug("Diagnosis agent: extract_categories tool wired")
 
     return Agent(
         name=DIAGNOSIS_AGENT_NAME,
@@ -158,6 +212,11 @@ def create_diagnosis_agent(mcp_toolset: Any | None) -> Agent:
         ),
         tools=tools,
     )
+
+
+# Alias kept for callers that prefer the ``build_*`` naming used elsewhere
+# in the codebase (matches ``build_phoenix_mcp_toolset``).
+build_diagnosis_agent = create_diagnosis_agent
 
 
 _JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
@@ -195,6 +254,7 @@ async def run_diagnosis_agent(
     session_id: str | None = None,
     phoenixloop_cycle_id: str | None = None,
     example_trace_ids: list[str] | None = None,
+    db: "aiosqlite.Connection | None" = None,
 ) -> dict:
     """Invoke the diagnosis sub-agent end-to-end and return the diagnosis dict.
 
@@ -218,7 +278,7 @@ async def run_diagnosis_agent(
         )
         return _fallback_result(trigger, "MCP toolset unavailable")
 
-    agent = create_diagnosis_agent(mcp_toolset)
+    agent = create_diagnosis_agent(mcp_toolset, db=db)
     session_service = InMemorySessionService()
     runner = Runner(
         agent=agent,

@@ -46,6 +46,7 @@ from src.evaluation.code_evals import (
     SchemaValidityEvaluator,
     ToolSequenceEvaluator,
 )
+from src.evaluation.code_evals.tool_sequence import REQUIRED_TOOLS
 from src.models import (
     AgentRun,
     ExperimentRecord,
@@ -53,6 +54,8 @@ from src.models import (
     ImprovementTrigger,
     RegressionExample,
     SupportTicket,
+    TicketCategory,
+    ToolCallRecord,
 )
 
 logger = logging.getLogger(__name__)
@@ -127,6 +130,10 @@ class ExperimentMetrics(BaseModel):
     regression_cases_pass_rate: float = 0.0
     safety_canary_pass_rate: float = 0.0
     eval_summary: dict = Field(default_factory=dict)
+    baseline_tool_call_count: float | None = None
+    candidate_tool_call_count: float | None = None
+    baseline_tool_adherence_rate: float | None = None
+    candidate_tool_adherence_rate: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -228,8 +235,8 @@ async def run_experiment(
     candidate_per_eval = await _score_runs(candidate_pairs)
 
     metrics = _aggregate_metrics(
-        baseline_runs=[run for _, run in baseline_pairs],
-        candidate_runs=[run for _, run in candidate_pairs],
+        baseline_pairs=baseline_pairs,
+        candidate_pairs=candidate_pairs,
         baseline_per_eval=baseline_per_eval,
         candidate_per_eval=candidate_per_eval,
     )
@@ -293,6 +300,10 @@ async def run_experiment(
         baseline_prompt_version_id=baseline_version_id,
         candidate_prompt_version_id=candidate_version_id,
         created_at=now,
+        baseline_tool_call_count=metrics.baseline_tool_call_count,
+        candidate_tool_call_count=metrics.candidate_tool_call_count,
+        baseline_tool_adherence_rate=metrics.baseline_tool_adherence_rate,
+        candidate_tool_adherence_rate=metrics.candidate_tool_adherence_rate,
     )
 
     logger.info(
@@ -729,12 +740,21 @@ async def _score_runs(
 
 def _aggregate_metrics(
     *,
-    baseline_runs: list[AgentRun],
-    candidate_runs: list[AgentRun],
+    baseline_pairs: list[tuple[SupportTicket, AgentRun]],
+    candidate_pairs: list[tuple[SupportTicket, AgentRun]],
     baseline_per_eval: dict[str, list[EvalOutput]],
     candidate_per_eval: dict[str, list[EvalOutput]],
 ) -> ExperimentMetrics:
-    """Roll up per-run code-eval outputs into the experiment metrics."""
+    """Roll up per-run code-eval outputs into the experiment metrics.
+
+    Also computes the multi-dimensional gate inputs:
+      - mean tool-call count per run (catches inflation regressions)
+      - tool-adherence rate (per-ticket-category required tools — reuses
+        ``ToolSequence`` evaluator's REQUIRED_TOOLS map).
+    """
+    baseline_runs = [run for _, run in baseline_pairs]
+    candidate_runs = [run for _, run in candidate_pairs]
+
     baseline_eval_summary = _per_eval_pass_rates(baseline_per_eval)
     candidate_eval_summary = _per_eval_pass_rates(candidate_per_eval)
 
@@ -748,6 +768,12 @@ def _aggregate_metrics(
     candidate_latency = _latency_p50(candidate_runs)
 
     safety = _safety_canary_pass_rate(candidate_per_eval, len(candidate_runs))
+
+    baseline_tcc = _mean_tool_call_count(baseline_runs)
+    candidate_tcc = _mean_tool_call_count(candidate_runs)
+
+    baseline_adh = _tool_adherence_rate(baseline_pairs)
+    candidate_adh = _tool_adherence_rate(candidate_pairs)
 
     summary: dict[str, object] = {
         name: {
@@ -777,7 +803,77 @@ def _aggregate_metrics(
         regression_cases_pass_rate=round(candidate_score, 4),
         safety_canary_pass_rate=round(safety, 4),
         eval_summary=summary,
+        baseline_tool_call_count=(
+            round(baseline_tcc, 4) if baseline_tcc is not None else None
+        ),
+        candidate_tool_call_count=(
+            round(candidate_tcc, 4) if candidate_tcc is not None else None
+        ),
+        baseline_tool_adherence_rate=(
+            round(baseline_adh, 4) if baseline_adh is not None else None
+        ),
+        candidate_tool_adherence_rate=(
+            round(candidate_adh, 4) if candidate_adh is not None else None
+        ),
     )
+
+
+def _extract_tool_names(run: AgentRun) -> set[str]:
+    """Return the unique tool names called during this agent run.
+
+    ``run.tool_calls_json`` is the typed ToolCallRecord list (deserialized
+    from the trace). Tolerates raw dicts for backward compat with older
+    in-memory pipelines.
+    """
+    names: set[str] = set()
+    for tc in run.tool_calls_json:
+        if isinstance(tc, ToolCallRecord):
+            names.add(tc.tool_name)
+        elif isinstance(tc, dict):
+            value = tc.get("tool_name")
+            if isinstance(value, str):
+                names.add(value)
+    return names
+
+
+def _mean_tool_call_count(runs: list[AgentRun]) -> float | None:
+    """Mean tool-call count per run, or None when there are no runs.
+
+    Counts every entry in ``tool_calls_json`` (not unique tools — repeated
+    calls count). This is the metric that flags the 4x inflation pattern.
+    """
+    if not runs:
+        return None
+    return sum(len(r.tool_calls_json) for r in runs) / len(runs)
+
+
+def _tool_adherence_rate(
+    pairs: list[tuple[SupportTicket, AgentRun]],
+) -> float | None:
+    """Fraction of runs whose actual tools are a superset of the required set.
+
+    A run "adheres" iff REQUIRED_TOOLS[category] is fully covered by the
+    set of tool names the agent invoked. Categories with no required
+    tools (e.g. ``ambiguous``) trivially adhere. None when there are no
+    pairs to measure.
+    """
+    if not pairs:
+        return None
+    adhered = 0
+    for ticket, run in pairs:
+        category = (
+            ticket.category.value
+            if isinstance(ticket.category, TicketCategory)
+            else str(ticket.category)
+        )
+        required = set(REQUIRED_TOOLS.get(category, []))
+        if not required:
+            adhered += 1
+            continue
+        called = _extract_tool_names(run)
+        if required.issubset(called):
+            adhered += 1
+    return adhered / len(pairs)
 
 
 def _build_phoenix_payload(

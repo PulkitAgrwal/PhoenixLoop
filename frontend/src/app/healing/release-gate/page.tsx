@@ -15,8 +15,8 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { PhoenixDeepLink } from "@/components/shared/phoenix-deep-link";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ScoreGauge } from "@/components/release-gate/score-gauge";
-import { GateChecklist } from "@/components/release-gate/gate-checklist";
 import { ApprovalCard } from "@/components/release-gate/approval-card";
+import { RuleRow, type RuleStatus } from "@/components/release-gate/rule-row";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -38,6 +38,111 @@ import { cn } from "@/lib/utils";
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 type StatusVariant = "success" | "error" | "warning" | "info" | "pending";
+
+// ─── 9-rule taxonomy ─────────────────────────────────────────────────────────
+
+interface NormalizedRule {
+  name: string;
+  status: RuleStatus;
+  required: string;
+  actual: string;
+}
+
+// Original 6 quality rules. Order is significant — this is the legacy display
+// order from the deprecated GateChecklist.
+const QUALITY_RULE_NAMES = [
+  "score_delta",
+  "zero_critical_failures",
+  "hallucination_rate",
+  "latency_budget",
+  "regression_pass_rate",
+  "safety_canary",
+] as const;
+
+// New (Wave 2b) multi-dimensional efficiency rules.
+const EFFICIENCY_RULE_NAMES = [
+  "tool_call_efficiency",
+  "latency_tier",
+  "tool_adherence",
+] as const;
+
+function coerceStatus(raw: unknown): RuleStatus {
+  if (raw === "pass" || raw === true) return "pass";
+  if (raw === "fail" || raw === false) return "fail";
+  if (raw === "skipped" || raw === null || raw === undefined)
+    return "skipped";
+  return "skipped";
+}
+
+function stringifyMetric(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "number") {
+    if (Number.isInteger(value)) return value.toString();
+    return value.toFixed(3);
+  }
+  if (typeof value === "boolean") return value ? "true" : "false";
+  return String(value);
+}
+
+/**
+ * Wave 2b ships rules_detail_json as an ordered array of
+ * `{name, status, required, actual}`. The pre-2b shape was a
+ * `Record<string, {passed, actual, threshold, baseline}>` map. Normalize
+ * both shapes into the same `NormalizedRule` list, slotting unknown rule
+ * names through but preserving the canonical ordering when possible.
+ */
+function normalizeRules(raw: unknown): NormalizedRule[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return null;
+        const r = entry as Record<string, unknown>;
+        const name = typeof r.name === "string" ? r.name : "";
+        if (!name) return null;
+        return {
+          name,
+          status: coerceStatus(r.status),
+          required: stringifyMetric(r.required),
+          actual: stringifyMetric(r.actual),
+        } satisfies NormalizedRule;
+      })
+      .filter((x): x is NormalizedRule => x !== null);
+  }
+  if (raw && typeof raw === "object") {
+    const map = raw as Record<string, unknown>;
+    const order = [...QUALITY_RULE_NAMES, ...EFFICIENCY_RULE_NAMES];
+    const out: NormalizedRule[] = [];
+    for (const name of order) {
+      const entry = map[name];
+      if (!entry || typeof entry !== "object") continue;
+      const r = entry as Record<string, unknown>;
+      out.push({
+        name,
+        status: coerceStatus(r.passed ?? r.status),
+        required: stringifyMetric(r.threshold ?? r.required),
+        actual: stringifyMetric(r.actual),
+      });
+    }
+    return out;
+  }
+  return [];
+}
+
+function partitionRules(rules: NormalizedRule[]): {
+  quality: NormalizedRule[];
+  efficiency: NormalizedRule[];
+} {
+  const qualitySet = new Set<string>(QUALITY_RULE_NAMES);
+  const efficiencySet = new Set<string>(EFFICIENCY_RULE_NAMES);
+  const quality: NormalizedRule[] = [];
+  const efficiency: NormalizedRule[] = [];
+  for (const r of rules) {
+    if (efficiencySet.has(r.name)) efficiency.push(r);
+    else if (qualitySet.has(r.name)) quality.push(r);
+    else quality.push(r); // unknown rules tagged as quality by default
+  }
+  return { quality, efficiency };
+}
 
 function decisionVariant(decision: ReleaseDecision): StatusVariant {
   switch (decision) {
@@ -91,7 +196,16 @@ interface DecisionDetailProps {
 }
 
 function DecisionDetail({ decision, onRefresh }: DecisionDetailProps) {
-  const totalRules = 6;
+  const rules = React.useMemo(
+    () => normalizeRules(decision.rules_detail_json),
+    [decision.rules_detail_json]
+  );
+  const { quality, efficiency } = React.useMemo(
+    () => partitionRules(rules),
+    [rules]
+  );
+  const evaluated = rules.filter((r) => r.status !== "skipped").length;
+  const totalRules = rules.length || 9;
   const passed = decision.promotion_rules_passed;
   const score = decision.release_score;
 
@@ -156,12 +270,55 @@ function DecisionDetail({ decision, onRefresh }: DecisionDetailProps) {
 
       <Separator />
 
-      {/* Gate Checklist */}
-      <div className="space-y-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Promotion Criteria
-        </h3>
-        <GateChecklist rulesDetail={decision.rules_detail_json} />
+      {/* Gate Rules — quality + new efficiency tier */}
+      <div className="space-y-4">
+        <div className="flex items-end justify-between gap-3">
+          <Eyebrow tone="mute">Quality gates</Eyebrow>
+          <span className="font-mono text-caption text-mute">
+            {evaluated} evaluated · {totalRules} total
+          </span>
+        </div>
+        <div className="space-y-2">
+          {quality.length > 0 ? (
+            quality.map((rule) => (
+              <RuleRow
+                key={`q-${rule.name}`}
+                name={rule.name}
+                status={rule.status}
+                required={rule.required}
+                actual={rule.actual}
+              />
+            ))
+          ) : (
+            <p className="text-body-sm text-mute">
+              No quality rules reported on this decision yet.
+            </p>
+          )}
+        </div>
+
+        <div className="flex items-center gap-3 pt-2">
+          <Eyebrow tone="brand">
+            {"// new — multi-dim efficiency gates"}
+          </Eyebrow>
+          <span className="h-px flex-1 bg-hairline" aria-hidden />
+        </div>
+        <div className="space-y-2">
+          {efficiency.length > 0 ? (
+            efficiency.map((rule) => (
+              <RuleRow
+                key={`e-${rule.name}`}
+                name={rule.name}
+                status={rule.status}
+                required={rule.required}
+                actual={rule.actual}
+              />
+            ))
+          ) : (
+            <p className="text-body-sm text-mute">
+              Efficiency rules not yet computed for this decision.
+            </p>
+          )}
+        </div>
       </div>
 
       <Separator />
@@ -271,12 +428,13 @@ export default function ReleaseGatePage() {
       <header className="flex flex-col gap-3">
         <Eyebrow tone="brand">Healing · Release gate</Eyebrow>
         <h1 className="text-display-lg text-ink-strong">
-          One verdict per experiment. Six rules each.
+          One verdict per experiment. Nine rules each.
         </h1>
         <p className="max-w-[68ch] text-body-md text-body">
-          The release gate scores each candidate prompt against six promotion rules and emits
-          a single verdict — <CodeInline>PROMOTED</CodeInline>, <CodeInline>REJECTED</CodeInline>,
-          or <CodeInline>PENDING REVIEW</CodeInline>. Critical failures block automatically.
+          The release gate scores each candidate prompt against six quality rules and three new
+          multi-dimensional efficiency rules, then emits a single verdict —{" "}
+          <CodeInline>PROMOTED</CodeInline>, <CodeInline>REJECTED</CodeInline>, or{" "}
+          <CodeInline>PENDING REVIEW</CodeInline>. Critical failures block automatically.
         </p>
       </header>
 
@@ -385,7 +543,7 @@ export default function ReleaseGatePage() {
                             pulse={d.decision === "pending_human_review"}
                           />
                           <p className="text-xs text-muted-foreground">
-                            {d.promotion_rules_passed}/6 rules
+                            {d.promotion_rules_passed} rules passed
                           </p>
                         </div>
                       </TableCell>

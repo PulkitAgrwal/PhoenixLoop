@@ -20,10 +20,21 @@ def test_prompt_lists_all_five_phoenix_mcp_tools() -> None:
         )
 
 
-def test_prompt_cap_is_four_not_two() -> None:
-    """Cap was raised from 2 to 4 per audit P1-1."""
-    assert "AT MOST 4 MCP tool calls" in DIAGNOSIS_INSTRUCTION
+def test_prompt_cap_is_three_total_tool_calls() -> None:
+    """Cap is now 3 total tool calls (2 MCP + 1 extract_categories).
+
+    Originally 2 (P1-0), then 4 (P1-1), now 3-total to budget for the
+    extract_categories LLM clustering call layered onto the diagnosis
+    sub-agent's toolbelt.
+    """
+    assert "AT MOST 3 tool calls total" in DIAGNOSIS_INSTRUCTION
     assert "AT MOST 2 MCP tool calls" not in DIAGNOSIS_INSTRUCTION
+    assert "AT MOST 4 MCP tool calls" not in DIAGNOSIS_INSTRUCTION
+
+
+def test_prompt_mentions_extract_categories() -> None:
+    """The prompt must direct the agent to call extract_categories."""
+    assert "extract_categories" in DIAGNOSIS_INSTRUCTION
 
 
 def test_prompt_forbids_list_projects() -> None:

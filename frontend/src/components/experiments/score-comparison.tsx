@@ -206,14 +206,15 @@ function Col({
   highlight?: boolean;
 }) {
   return (
-    <div className={cn(highlight && "bg-canvas-soft/40")}>
+    <div className={cn("min-w-0", highlight && "bg-canvas-soft/40")}>
       <div
         className={cn(
-          "border-b border-hairline px-4 py-2 text-eyebrow-mono uppercase",
+          "flex h-12 items-center border-b border-hairline px-4 text-eyebrow-mono uppercase",
           mute ? "text-mute" : "text-brand-soft"
         )}
+        title={label}
       >
-        {label}
+        <span className="truncate min-w-0">{label}</span>
       </div>
       <div>{children}</div>
     </div>

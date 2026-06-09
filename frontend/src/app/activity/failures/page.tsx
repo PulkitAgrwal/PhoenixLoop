@@ -50,7 +50,15 @@ export default function FailuresPage() {
         if (cancelled) return;
         if (!res.ok) setError(res.error ?? "Failed to load failure data.");
         else {
-          const items = Array.isArray(res.data) ? (res.data as FailureAggregate[]) : [];
+          const raw = res.data as
+            | FailureAggregate[]
+            | { items: FailureAggregate[] }
+            | null;
+          const items: FailureAggregate[] = Array.isArray(raw)
+            ? (raw as FailureAggregate[])
+            : raw && Array.isArray((raw as { items?: FailureAggregate[] }).items)
+              ? ((raw as { items: FailureAggregate[] }).items)
+              : [];
           setFailures(items);
           if (items[0]) setSelected(items[0].failure_key);
         }

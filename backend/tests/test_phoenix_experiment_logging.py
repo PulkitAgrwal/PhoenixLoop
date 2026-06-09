@@ -199,6 +199,7 @@ async def test_load_dataset_examples_prefers_local_regression_examples():
     import aiosqlite
     from src.db import (
         _CREATE_TABLES_SQL,
+        _apply_column_migrations,
         insert_improvement_trigger,
         insert_regression_example,
     )
@@ -215,6 +216,7 @@ async def test_load_dataset_examples_prefers_local_regression_examples():
         await conn.execute("PRAGMA foreign_keys = ON")
         await conn.executescript(_CREATE_TABLES_SQL)
         await conn.commit()
+        await _apply_column_migrations(conn)
 
         trigger = ImprovementTrigger(
             improvement_trigger_id="IT-load-1",

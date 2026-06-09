@@ -115,6 +115,10 @@ async def stream_full_loop(
         except Exception as exc:
             logger.warning("stream: agent failed on %s: %s", ticket.ticket_id, exc)
             yield "agent_failed", {"ticket_id": ticket.ticket_id, "error": str(exc)}
+            yield "evals_skipped", {
+                "ticket_id": ticket.ticket_id,
+                "reason": "agent_failed",
+            }
             continue
 
         # Demo-only deterministic failure: strip citations from tickets at

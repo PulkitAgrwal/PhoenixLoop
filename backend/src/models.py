@@ -85,6 +85,34 @@ class PromptSource(str, Enum):
     MANUAL = "manual"
 
 
+class ChangeClass(str, Enum):
+    """Taxonomy of change types proposed by the diagnosis pipeline.
+
+    Tagged onto ``prompt_versions.change_class`` so the UI can roll up
+    healing cycles by the kind of remediation applied.
+    """
+
+    PROMPT_ADDITION = "prompt_addition"
+    TOOL_POLICY = "tool_policy"
+    ROUTING = "routing"
+    DATA_SOURCE = "data_source"
+    EVAL_DEFINITION = "eval_definition"
+    MANUAL_EDIT = "manual_edit"
+    SEED = "seed"
+
+
+class JudgeLabel(str, Enum):
+    """Structured verdict emitted by every LLM judge.
+
+    Used for both ground-truth canary labels and per-run judge predictions
+    so Cohen's kappa can be computed on a fixed three-way label space.
+    """
+
+    PASS = "pass"
+    FAIL = "fail"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+
+
 class ActivityEventKind(str, Enum):
     AGENT_RUN = "agent_run"
     FAILURE = "failure"
@@ -119,6 +147,7 @@ class PromptVersion(BaseModel):
     improvement_trigger_id: str | None = None
     created_at: str
     metadata_json: dict[str, Any] = Field(default_factory=dict)
+    change_class: ChangeClass | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +227,8 @@ class EvalResult(BaseModel):
     span_id: str | None = None
     metadata_json: dict | None = None
     created_at: str
+    rubric_version: str | None = None
+    evidence_json: list[str] = Field(default_factory=list)
 
 
 class FailureAggregate(BaseModel):
@@ -210,6 +241,56 @@ class FailureAggregate(BaseModel):
     example_run_ids_json: list[str] = []
     is_active: bool = True
     computed_at: str
+
+
+# ---------------------------------------------------------------------------
+# Pydantic Models — Canary Labels & Judge Outputs
+# ---------------------------------------------------------------------------
+
+class JudgeOutput(BaseModel):
+    """Structured output contract for the four LLM judges.
+
+    Every judge returns this shape so the eval-payload schema is uniform
+    across groundedness, policy_compliance, tone, and resolution_quality.
+    The ``evidence`` field carries supporting quotes used by the UI.
+    """
+
+    label: JudgeLabel
+    explanation: str = Field(min_length=1, max_length=8000)
+    evidence: list[str] = Field(default_factory=list)
+
+
+class CanaryLabel(BaseModel):
+    """Hand-derived ground-truth label for an LLM judge.
+
+    One row per (fixture_id, judge_name); rationale documents why the
+    fixture maps to this label so reviewers can audit the gold set.
+    """
+
+    canary_label_id: str
+    fixture_id: str = Field(min_length=1, max_length=200)
+    ticket_category: TicketCategory
+    judge_name: str = Field(min_length=1, max_length=128)
+    expected_label: JudgeLabel
+    rationale: str = Field(min_length=1, max_length=4000)
+    created_at: str
+
+
+class CanaryRun(BaseModel):
+    """One judge prediction on one canary fixture.
+
+    Persisted per run so Cohen's kappa is reproducible and historical
+    drift can be plotted as the judge prompt evolves.
+    """
+
+    canary_run_id: str
+    canary_label_id: str
+    judge_name: str = Field(min_length=1, max_length=128)
+    predicted_label: JudgeLabel
+    evidence_json: list[str] = Field(default_factory=list)
+    explanation: str | None = None
+    judge_model: str = Field(min_length=1, max_length=128)
+    created_at: str
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +320,8 @@ class RegressionExample(BaseModel):
     phoenix_dataset_id: str | None = None
     uploaded_at: str | None = None
     created_at: str
+    source_agent_run_id: str | None = None
+    auto_promoted: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +353,10 @@ class ExperimentRecord(BaseModel):
     baseline_prompt_version_id: str | None = None
     candidate_prompt_version_id: str | None = None
     created_at: str
+    baseline_tool_call_count: float | None = None
+    candidate_tool_call_count: float | None = None
+    baseline_tool_adherence_rate: float | None = None
+    candidate_tool_adherence_rate: float | None = None
 
 
 class CreatePromptVersionRequest(BaseModel):

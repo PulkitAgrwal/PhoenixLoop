@@ -37,6 +37,10 @@ class ToolSequenceEvaluator(BaseEvaluator):
     def annotation_level(self) -> str:
         return "span"
 
+    @property
+    def rubric_version(self) -> str:
+        return "tool_sequence_v1"
+
     async def evaluate(self, agent_run: AgentRun, ticket: SupportTicket) -> EvalOutput:
         """Verify required tools were called based on ticket category."""
         category = ticket.category.value if isinstance(ticket.category, TicketCategory) else ticket.category
@@ -69,7 +73,13 @@ class ToolSequenceEvaluator(BaseEvaluator):
                 agent_run.agent_run_id,
                 explanation,
             )
-            return self._make_failure_output(summary, explanation)
+            evidence = [
+                f"category={category}",
+                f"required_tools={required}",
+                f"called_tools={sorted(called_tools)}",
+                f"missing_tools={missing}",
+            ]
+            return self._make_failure_output(summary, explanation, evidence=evidence)
 
         return self._make_pass_output(
             f"All required tools for '{category}' were called: {required}."

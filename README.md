@@ -23,15 +23,18 @@
   </tr>
   <tr>
     <td><img src="frontend/public/screenshots/prompt-diff.png" alt="Prompt diff — candidate v1.1-refund-citation-required appends the rule &quot;For any refund-category response, you MUST call search_policy and cite at least one POL-REFUND-XXX&quot;" /></td>
-    <td><img src="frontend/public/screenshots/release-gate.png" alt="Release gate verdict — score 91.4/100, 6/6 promotion rules passed, Score Delta +0.490 (target ≥ 0.050)" /></td>
+    <td><img src="frontend/public/screenshots/release-gate.png" alt="Release gate verdict — score 85.7/100, 9/9 promotion rules passed (6 quality + 3 efficiency), pending human review" /></td>
   </tr>
   <tr>
-    <td><img src="frontend/public/screenshots/experiments-scoreboard.png" alt="Experiments scoreboard — baseline v1.0.0 release score 0.42 vs candidate 0.91 (+117%), regression canaries 100%, safety canaries 100%" /></td>
+    <td><img src="frontend/public/screenshots/experiments-scoreboard.png" alt="Experiments scoreboard — baseline v1.0.0 vs live candidate, side-by-side metric comparison, regression canaries 86%, safety canaries 100%" /></td>
     <td><img src="frontend/public/screenshots/activity-runs.png" alt="Activity → Runs — every ADK agent_run captured by Phoenix with status, eval results, latency" /></td>
   </tr>
   <tr>
     <td><img src="frontend/public/screenshots/conversation.png" alt="Conversation page — Refund-timing scenario loaded, customer message visible, Production prompt v1.0.0 badge top-right, LIVE TRACE panel on the right" /></td>
     <td><img src="frontend/public/screenshots/prompts.png" alt="Prompts page — v1.0.0 seed + v1.1-refund-citation-required candidate, full prompt text scrollable" /></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="frontend/public/screenshots/settings-canary.png" alt="Settings → Judge calibration — Cohen's κ + accuracy + N per LLM judge against the 44-row seeded canary set; policy_compliance κ=0.84, safety_privacy κ=0.56" /></td>
   </tr>
 </table>
 
@@ -44,7 +47,7 @@
 
 ## TL;DR
 
-- **The agent fixes itself.** When PhoenixLoop's support agent fails the same way three times, a diagnosis sub-agent reads its own failing spans back from Arize Phoenix via MCP, drafts a one-line prompt patch, A/B-tests it against a frozen regression set, and only ships the candidate if a release gate clears six promotion rules.
+- **The agent fixes itself.** When PhoenixLoop's support agent fails the same way three times, a diagnosis sub-agent reads its own failing spans back from Arize Phoenix via MCP, drafts a one-line prompt patch, A/B-tests it against a frozen regression set, and only ships the candidate if a release gate clears nine promotion rules (6 quality + 3 efficiency).
 - **Phoenix is load-bearing, not a logging skin.** Every trace, eval annotation, dataset row, prompt version, and experiment is round-tripped through Phoenix. Take Phoenix away and the loop literally cannot close.
 - **One full healing cycle runs in ~90 seconds** on the auto-seed: six tickets, two intentional failures, one cluster, one diagnosis, one experiment, one verdict. Under thirty Gemini calls. Measurable end-to-end.
 - **Deployed on Cloud Run.** Live demo is one click from the hero. Backend runs Gemini through Vertex AI. See [DEPLOYMENT.md](./DEPLOYMENT.md) for the gcloud commands.
@@ -75,7 +78,7 @@ The seven stages, each grounded in a `file_path:line_number` you can open in you
 
 6. **Experiment** — the orchestrator loads up to 5 examples from the `regression-{failure_key}` Phoenix dataset, runs the agent twice per example (baseline prompt + candidate prompt) tagged `gemini_call_purpose=experiment_baseline|experiment_candidate`, and scores each run with the deterministic code-eval stack. LLM judges are skipped here on purpose — the per-example noise dominates at 5 samples and would double Gemini cost. The hallucination column is honestly labeled "Not sampled". See `backend/src/experiments/orchestrator.py:128`.
 
-7. **Gate** — the release gate evaluates six rules (release_score uplift, critical-failure-rate non-regression, hallucination-rate non-regression, latency-budget non-regression, regression canary pass-rate, safety canary pass-rate) and renders a `PROMOTED` / `REJECTED` / `PENDING_HUMAN_REVIEW` / `BLOCKED_CRITICAL_FAILURE` verdict. On promotion, `phoenix-mcp:add-prompt-version-tag tag=production` flips the candidate to production in Phoenix, and the local `prompts.active_version_id` is updated so the next agent run picks up the new prompt automatically. See `backend/src/experiments/release_gate.py:1` and `backend/src/api/release_gate.py:1`.
+7. **Gate** — the release gate evaluates nine rules (6 quality + 3 efficiency from the multi-dim gate): release_score uplift, critical-failure-rate non-regression, hallucination-rate non-regression, latency-budget non-regression, regression canary pass-rate, safety canary pass-rate, tool-call efficiency (candidate tool-call count ≤ 1.5× baseline), latency tier (bucketed fast / ok / slow — candidate's tier may not regress), tool adherence (candidate ≥ `max(0.85, baseline − 0.05)`). The verdict is `PROMOTED` / `REJECTED` / `PENDING_HUMAN_REVIEW` / `BLOCKED_CRITICAL_FAILURE`. On promotion, `phoenix-mcp:add-prompt-version-tag tag=production` flips the candidate to production in Phoenix, and the local `prompts.active_version_id` is updated so the next agent run picks up the new prompt automatically. See `backend/src/experiments/release_gate.py:1` and `backend/src/api/release_gate.py:1`.
 
 This is the differentiator. The Arize starter (`Arize-ai/gemini-hackathon`) wires Phoenix MCP into the Gemini CLI for the *developer* to query at dev-time. PhoenixLoop wires Phoenix MCP into the agent's `tools=[...]` list at *runtime* so the agent can read its own observability data. See the [comparison table](#comparison-vs-the-arize-starter) below.
 
@@ -308,6 +311,8 @@ Every agent run is graded by 14 evaluators across three categories. Failures sha
 
 The four judges share one Gemini call returning structured output. This is a deliberate cost trick — running them as four separate calls would hit the free-tier 5 RPM ceiling on a single ticket. See `backend/src/evaluation/llm_judges/combined.py:202`.
 
+Each judge follows a strict 5-section template (target, inputs, labels, decision rules, one example per label), emits categorical labels only (`pass | fail | insufficient_evidence` — no numeric scales), and returns a `JudgeOutput(label, explanation, evidence[])` where `evidence[]` is a list of literal quoted snippets from the agent output that ground the verdict. The new `rubric_version` and `evidence_json` columns on `eval_results` are populated by every code evaluator and every LLM judge, so the trace-and-evals payload becomes agent-consumable downstream. See [Judge calibration with Cohen's κ](#judge-calibration-with-cohens-κ) below for how the canary set keeps these judges honest.
+
 ### Phoenix tool-use evaluators (3)
 
 | Evaluator | What it checks | File |
@@ -329,6 +334,24 @@ Annotation writes happen off the streaming path via `asyncio.to_thread` so a slo
 
 ---
 
+## Judge calibration with Cohen's κ
+
+LLM judges are the second-fastest way to ship a hallucinated metric (the first is hand-grading on a Wednesday afternoon). PhoenixLoop calibrates the four judges against a hand-curated canary set and reports Cohen's κ so the quality signal stays honest as judge prompts evolve.
+
+**The 5-section judge template.** Every judge prompt in `backend/src/evaluation/llm_judges/combined.py` follows the same rigid structure: (1) evaluation target, (2) inputs, (3) labels — categorical only, `pass | fail | insufficient_evidence`, no numeric scales, (4) decision rules with explicit edge cases, (5) one worked example per label. Numeric "confidence 0.78" outputs were removed deliberately — they invited spurious precision and made comparison across judge versions ambiguous. `insufficient_evidence` maps to `score=None` so it never dilutes the release-gate roll-up.
+
+**The `evidence[]` field separates judgment from reasoning.** Each judge returns a `JudgeOutput(label, explanation, evidence[])` where `evidence[]` is a list of *literal* quoted snippets from the agent output (or its tool outputs) that ground the verdict. The explanation is free-form prose; the evidence list is grep-friendly. When a judge flips a verdict between runs, the `evidence_json` column on `eval_results` tells you whether the underlying snippet actually changed or whether the judge just rationalized differently.
+
+**The canary set.** `backend/tests/fixtures/canary/canary_labels.json` ships 44 hand-curated ground-truth labels (11 fixtures × 4 judges) drawn from the deterministic seed — refund-cited, refund-uncited, privacy-leak, fabricated-citation, legal-not-escalated, ambiguous-clarify, etc. Each row carries the expected categorical label plus a rationale. The fixture loader is idempotent — re-running `POST /api/evals/canary/load` inserts zero new rows on the second call.
+
+**Kappa computation.** `POST /api/evals/canary/run` invokes the four-judge combined call once per fixture (the batch is shared across all four judges — one Gemini call per fixture, ~11 calls for a full canary run), persists one `canary_runs` row per `(fixture, judge)`, and `GET /api/evals/canary/kappa` returns per-judge `{cohens_kappa, accuracy, n_samples, confusion_matrix}` envelopes. Cohen's κ is computed in pure Python (no scipy dependency) on the three-way label space. The 3×3 confusion matrix is the diagnostic — `pass→fail` confusion means the judge is too strict, `fail→pass` means too permissive, and `pass→insufficient_evidence` means the judge isn't finding the evidence the human curator found.
+
+**Where to view it.** The Settings page (`/settings`) renders a `<CanaryTable />` showing the four judges with their κ, accuracy, model, sample size, last-computed timestamp, and an expandable 3×3 confusion matrix per judge. κ is colored by the Landis-Koch interpretation: brand-green for ≥0.6 (substantial agreement), ink for 0.2-0.6, fail-tone for <0.2. "Load fixtures" and "Recompute" buttons let you exercise the loop without leaving the UI.
+
+A known limitation: the Arize newsletter recommends cross-family judges (e.g. Claude grading Gemini) to mitigate self-preference bias. PhoenixLoop is single-model — Gemini 2.5 Flash everywhere — per the Google hackathon constraint. Kappa against the human-curated canary set is the proxy we use to keep that bias visible.
+
+---
+
 ## Comparison vs. the Arize starter
 
 The Arize starter (`Arize-ai/gemini-hackathon`) is the most relevant baseline. It's the floor, not the ceiling, and judges know it. The table below is what PhoenixLoop adds.
@@ -342,7 +365,7 @@ The Arize starter (`Arize-ai/gemini-hackathon`) is the most relevant baseline. I
 | Evaluation | None | 7 code evals + 4 LLM judges (2 use Phoenix Evals templates verbatim) + 3 tool evals — 14 total |
 | Datasets | One static dataset | Two patterns: `successful-resolutions` (few-shot) + `regression-{failure_key}` (auto-grown by the failure aggregator) |
 | Experiments | None | Baseline-vs-candidate via `experiments/orchestrator.py`, with Phoenix-side experiment records minted via `client.experiments.create(dataset_id=...)` |
-| Release gate | None | Six-rule gate + frontend approval UI + audit trail |
+| Release gate | None | Nine-rule gate (6 quality + 3 efficiency: tool-call inflation, latency tier, tool adherence) + frontend approval UI + audit trail |
 | Self-improvement loop | None | Full: `failure_aggregator` → `proposal_generator` → `experiment` → `release_gate` → `add-prompt-version-tag` |
 | Frontend | None | 21 frontend files, 918-line landing page, hand-built SVG architecture diagram, 7-stage loop visualisation, live trace pane |
 
@@ -436,7 +459,7 @@ The scoreboard renders baseline-vs-candidate ASCII block bars and per-metric del
 
 ### Stage 6 — Release-gate verdict (~1s)
 
-The release gate (`backend/src/experiments/release_gate.py`) evaluates six rules:
+The release gate (`backend/src/experiments/release_gate.py`) evaluates nine rules. Six quality rules:
 
 1. `release_score >= threshold` (default 0.7)
 2. `candidate_release_score >= baseline_release_score`
@@ -445,7 +468,13 @@ The release gate (`backend/src/experiments/release_gate.py`) evaluates six rules
 5. `regression_cases_pass_rate >= 0.9`
 6. `safety_canary_pass_rate >= 0.95`
 
-A `PROMOTED` verdict triggers `phoenix-mcp:add-prompt-version-tag(version=candidate, tag="production")` and flips the local `prompts.active_version_id` so the next agent run picks up the new prompt automatically. A `PENDING_HUMAN_REVIEW` verdict surfaces the approval UI on `/healing/release-gate`.
+Plus three multi-dimensional efficiency rules — best correctness ≠ best system; these catch tool-call-inflation and latency-tier regressions that pure accuracy gates miss:
+
+7. `candidate_tool_call_count <= 1.5 * baseline_tool_call_count` — tool-call efficiency
+8. Latency tier (bucketed: fast <3000ms, ok <8000ms, slow ≥) — candidate's tier may not regress
+9. `candidate_tool_adherence_rate >= max(0.85, baseline_tool_adherence_rate - 0.05)`
+
+Rules 7 and 9 cleanly skip when the baseline metric is unavailable (older experiments) instead of failing on absence of data. A `PROMOTED` verdict triggers `phoenix-mcp:add-prompt-version-tag(version=candidate, tag="production")` and flips the local `prompts.active_version_id` so the next agent run picks up the new prompt automatically. A `PENDING_HUMAN_REVIEW` verdict surfaces the approval UI on `/healing/release-gate`.
 
 ### Stage 7 — Verify (~5s)
 
@@ -522,7 +551,7 @@ cd frontend && npm run lint && npx tsc --noEmit
 make test
 ```
 
-The backend test suite (~25 files, 240+ tests) covers:
+The backend test suite (~25 files, 280+ tests) covers:
 
 | Area | What's covered |
 |---|---|
@@ -533,11 +562,14 @@ The backend test suite (~25 files, 240+ tests) covers:
 | Failure aggregator | Cluster threshold trip, multi-row dataset promotion, cooldown logic |
 | Proposal generator | Structured-output parsing, retry-on-rate-limit, candidate version stamping |
 | Experiment orchestrator | Dataset loading, prompt resolution, score aggregation, empty-result path |
-| Release gate | Six-rule pass/fail combinations including null hallucination rates |
+| Release gate | Nine-rule pass/fail combinations (6 quality + 3 efficiency) including null hallucination rates and skipped-on-missing-baseline semantics |
 | Diagnosis sub-agent | MCP toolset attachment, fallback to deterministic diagnosis |
 | Demo seed | Idempotent re-runs, partial seed recovery |
 | Degraded mode | Phoenix unreachable, MCP toolset unavailable |
 | Lightweight mode | Fixture mode skips Gemini and reads from `tests/fixtures/seed/` |
+| Canary + kappa | Idempotent fixture load, pure-Python Cohen's κ on a 3-way label space, per-judge confusion matrix |
+| Multi-dim gate | Rules 7–9 (tool-call efficiency, latency tier, tool adherence) with skipped-on-missing-baseline semantics |
+| Judge template | 5-section judge prompts, `JudgeOutput.evidence[]` parsing, `insufficient_evidence` → `score=None` mapping |
 
 Tests are designed to run without `PHOENIX_API_KEY` or `GOOGLE_API_KEY` set — anything that touches a live service is either mocked or skipped cleanly.
 
@@ -595,6 +627,8 @@ Live-mode auto-seed makes ~30 Gemini calls end-to-end. Breakdown by `gemini_call
 | `patch_synthesis` | 1 | Single structured-output call per failure cluster |
 | `experiment_baseline` | 5 | One per regression example, baseline prompt |
 | `experiment_candidate` | 5 | One per regression example, candidate prompt |
+| `extract_categories` | 0–1 | LLM-driven failure clustering on the diagnosis sub-agent; one call per `failure_key` |
+| `canary_run` | ~11 (on demand) | One Gemini call per canary fixture (4 judges share the call), only when `POST /api/evals/canary/run` is invoked |
 
 Every Gemini call is tagged with a `gemini_call_purpose` extra so the per-purpose token accounting in the logs is grep-friendly. The combined-judge trick (`backend/src/evaluation/llm_judges/combined.py:202`) keeps the seed under the free-tier 5 RPM ceiling.
 

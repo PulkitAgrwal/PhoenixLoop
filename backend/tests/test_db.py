@@ -69,10 +69,13 @@ async def db():
     conn = await aiosqlite.connect(":memory:")
     conn.row_factory = aiosqlite.Row
     await conn.execute("PRAGMA foreign_keys = ON")
-    # Re-create tables on this specific connection (in-memory DBs are per-connection)
-    from src.db import _CREATE_TABLES_SQL
+    # Re-create tables on this specific connection (in-memory DBs are per-connection).
+    # Apply column migrations the same way init_db() does so the schema matches
+    # production after Wave 1 additive migrations.
+    from src.db import _CREATE_TABLES_SQL, _apply_column_migrations
     await conn.executescript(_CREATE_TABLES_SQL)
     await conn.commit()
+    await _apply_column_migrations(conn)
     yield conn
     await conn.close()
 
@@ -169,6 +172,8 @@ class TestInitDb:
         expected = sorted([
             "agent_runs",
             "audit_events",
+            "canary_labels",
+            "canary_runs",
             "conversation_sessions",
             "eval_results",
             "experiments",

@@ -23,8 +23,12 @@ import { EvidenceCard } from "@/components/improvements/evidence-card";
 import { DiagnosisTrace } from "@/components/improvements/diagnosis-trace";
 import { PromptDiff } from "@/components/improvements/prompt-diff";
 import { RegressionList } from "@/components/improvements/regression-list";
+import { ChangeClassBadge } from "@/components/improvements/change-class-badge";
+import { EvidenceList } from "@/components/improvements/evidence-list";
 import { api } from "@/lib/api";
 import type {
+  ChangeClass,
+  EvalResult,
   FailureAggregate,
   ImprovementTrigger,
   TriggerReason,
@@ -69,6 +73,56 @@ function timeAgo(iso: string): string {
   if (s < 3600) return `${Math.round(s / 60)}m ago`;
   if (s < 86400) return `${Math.round(s / 3600)}h ago`;
   return `${Math.round(s / 86400)}d ago`;
+}
+
+/**
+ * Aggregate evidence quotes from a trigger's linked eval_results.
+ *
+ * The API contract (Wave 2a) attaches `eval_results` to the GET response.
+ * Falls back to inspecting `patch_proposal_json.evidence` and
+ * `regression_examples_json[*].evidence_json` to stay graceful before the
+ * backend is wired in.
+ */
+interface EvidenceBundle {
+  evaluator: string;
+  quotes: string[];
+}
+
+function extractEvidenceBundles(
+  trigger: ImprovementTrigger & { eval_results?: EvalResult[] | null }
+): EvidenceBundle[] {
+  const bundles: EvidenceBundle[] = [];
+
+  const linkedEvals = Array.isArray(trigger.eval_results)
+    ? trigger.eval_results
+    : [];
+  for (const ev of linkedEvals) {
+    const quotes = Array.isArray(ev.evidence_json)
+      ? ev.evidence_json.filter(
+          (q): q is string => typeof q === "string" && q.trim().length > 0
+        )
+      : [];
+    if (quotes.length > 0) {
+      bundles.push({ evaluator: ev.evaluator_name, quotes });
+    }
+  }
+
+  // Fallback: evidence quotes occasionally live on the patch proposal.
+  if (bundles.length === 0 && trigger.patch_proposal_json) {
+    const raw = (trigger.patch_proposal_json as Record<string, unknown>)[
+      "evidence_quotes"
+    ];
+    if (Array.isArray(raw)) {
+      const quotes = raw.filter(
+        (q): q is string => typeof q === "string" && q.trim().length > 0
+      );
+      if (quotes.length > 0) {
+        bundles.push({ evaluator: "diagnosis", quotes });
+      }
+    }
+  }
+
+  return bundles;
 }
 
 interface TriggerDetailProps {
@@ -203,7 +257,34 @@ function TriggerDetail({ trigger, onRefresh }: TriggerDetailProps) {
         failureKey={trigger.failure_key}
       />
 
+      {(trigger.change_class || trigger.is_high_risk) && (
+        <ChangeClassBadge
+          changeClass={(trigger.change_class as ChangeClass | null) ?? null}
+          label={trigger.change_class_label ?? null}
+          isHighRisk={trigger.is_high_risk ?? false}
+        />
+      )}
+
       <DiagnosisTrace diagnosis={trigger.diagnosis_json} />
+
+      {(() => {
+        const bundles = extractEvidenceBundles(trigger);
+        if (bundles.length === 0) return null;
+        return (
+          <section
+            aria-label="Evaluator evidence"
+            className="rounded-md border border-hairline bg-canvas px-4 py-3 flex flex-col gap-3"
+          >
+            {bundles.map((b, i) => (
+              <EvidenceList
+                key={`${b.evaluator}-${i}`}
+                evidence={b.quotes}
+                caption={b.evaluator}
+              />
+            ))}
+          </section>
+        );
+      })()}
 
       <PromptDiff proposal={trigger.patch_proposal_json} />
 
@@ -268,10 +349,21 @@ export default function ImprovementsPage() {
         if (res.ok && res.data) {
           const raw = res.data as
             | ImprovementTrigger
-            | { trigger: ImprovementTrigger };
-          const trigger =
+            | (ImprovementTrigger & {
+                trigger?: ImprovementTrigger;
+                change_class?: string | null;
+                change_class_label?: string | null;
+                is_high_risk?: boolean | null;
+              });
+          const innerTrigger =
             "trigger" in raw && raw.trigger ? raw.trigger : (raw as ImprovementTrigger);
-          setSelectedTrigger(trigger);
+          const merged: ImprovementTrigger = {
+            ...innerTrigger,
+            change_class: ((raw as { change_class?: string | null }).change_class as ChangeClass | null | undefined) ?? innerTrigger.change_class ?? null,
+            change_class_label: (raw as { change_class_label?: string | null }).change_class_label ?? innerTrigger.change_class_label ?? null,
+            is_high_risk: (raw as { is_high_risk?: boolean | null }).is_high_risk ?? innerTrigger.is_high_risk ?? null,
+          };
+          setSelectedTrigger(merged);
         }
       } catch {
         const found = triggers.find((t) => t.improvement_trigger_id === id);

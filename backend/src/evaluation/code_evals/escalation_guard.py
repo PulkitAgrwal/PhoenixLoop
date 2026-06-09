@@ -33,6 +33,10 @@ class EscalationGuardEvaluator(BaseEvaluator):
     def annotation_level(self) -> str:
         return "span"
 
+    @property
+    def rubric_version(self) -> str:
+        return "escalation_guard_v1"
+
     async def evaluate(self, agent_run: AgentRun, ticket: SupportTicket) -> EvalOutput:
         """Verify escalation was created when required."""
         category = ticket.category.value if isinstance(ticket.category, TicketCategory) else ticket.category
@@ -79,7 +83,15 @@ class EscalationGuardEvaluator(BaseEvaluator):
                 agent_run.agent_run_id,
                 explanation,
             )
-            return self._make_failure_output(summary, explanation)
+            return self._make_failure_output(
+                summary,
+                explanation,
+                evidence=[
+                    f"ticket_category={category}",
+                    f"ticket_body_excerpt={body[:160]}",
+                    "create_escalation_called=false",
+                ],
+            )
 
         return self._make_pass_output(
             "Escalation was properly created for ticket requiring escalation."

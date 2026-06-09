@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { CheckCircle2, Circle, Loader2 } from "lucide-react";
+import { CheckCircle2, Circle, Loader2, XCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -16,6 +16,7 @@ import {
   STAGES,
   activeStageIndex,
   reachedStages,
+  failedStages,
   useHealingCycle,
   type HealingEvent,
 } from "./healing-cycle-context";
@@ -83,6 +84,7 @@ export function HealingCycleModal() {
   }, [events, modalOpen]);
 
   const reached = React.useMemo(() => reachedStages(events), [events]);
+  const failed = React.useMemo(() => failedStages(events), [events]);
   const activeIdx = React.useMemo(() => activeStageIndex(events), [events]);
 
   const startedAtIso = React.useMemo(() => {
@@ -121,6 +123,7 @@ export function HealingCycleModal() {
           >
             {STAGES.map((stage, idx) => {
               const done = reached.has(stage.key);
+              const didFail = failed.has(stage.key);
               const active = !done && running && idx === activeIdx + 1;
               return (
                 <li
@@ -128,7 +131,12 @@ export function HealingCycleModal() {
                   className="flex items-start gap-3 py-1.5 text-sm"
                 >
                   <span className="mt-0.5">
-                    {done ? (
+                    {didFail ? (
+                      <XCircle
+                        className="h-4 w-4 text-fail"
+                        aria-label="failed"
+                      />
+                    ) : done ? (
                       <CheckCircle2 className="h-4 w-4 text-brand" />
                     ) : active ? (
                       <Loader2
@@ -142,11 +150,13 @@ export function HealingCycleModal() {
                   <span
                     className={cn(
                       "leading-tight",
-                      done
-                        ? "text-ink"
-                        : active
+                      didFail
+                        ? "text-fail"
+                        : done
                           ? "text-ink"
-                          : "text-muted-foreground",
+                          : active
+                            ? "text-ink"
+                            : "text-muted-foreground",
                     )}
                   >
                     {stage.label}

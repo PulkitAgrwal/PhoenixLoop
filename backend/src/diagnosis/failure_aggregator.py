@@ -14,6 +14,7 @@ from src.models import (
     FailureAggregate,
     FailureType,
     ImprovementTrigger,
+    RegressionExample,
     TriggerReason,
 )
 
@@ -288,7 +289,22 @@ async def check_thresholds(
                 created_at=now_iso,
                 updated_at=now_iso,
             )
-            await insert_improvement_trigger(db, trigger)
+            try:
+                await insert_improvement_trigger(db, trigger)
+                await auto_promote_trigger_to_regression_examples(
+                    trigger, db, evaluator_name=result.evaluator_name
+                )
+            except Exception as exc:
+                # SQLite auto-rolls back the in-flight statement on
+                # exception; we propagate so the caller knows the trigger
+                # didn't commit cleanly. Logged loudly before re-raising.
+                logger.error(
+                    "Critical-failure trigger insert+promote failed for %s: %s",
+                    result.failure_key,
+                    exc,
+                    exc_info=True,
+                )
+                raise
             triggers.append(trigger)
             trigger_map[result.failure_key] = trigger
             logger.info("Critical failure trigger created: %s", result.failure_key)
@@ -314,7 +330,19 @@ async def check_thresholds(
                 created_at=now_iso,
                 updated_at=now_iso,
             )
-            await insert_improvement_trigger(db, trigger)
+            try:
+                await insert_improvement_trigger(db, trigger)
+                await auto_promote_trigger_to_regression_examples(
+                    trigger, db, evaluator_name=agg.evaluator_name
+                )
+            except Exception as exc:
+                logger.error(
+                    "Threshold trigger insert+promote failed for %s: %s",
+                    agg.failure_key,
+                    exc,
+                    exc_info=True,
+                )
+                raise
             triggers.append(trigger)
             logger.info(
                 "Threshold trigger created: %s (count=%d)",
@@ -323,6 +351,111 @@ async def check_thresholds(
             )
 
     return triggers
+
+
+async def auto_promote_trigger_to_regression_examples(
+    trigger: ImprovementTrigger,
+    db: aiosqlite.Connection,
+    *,
+    evaluator_name: str | None = None,
+) -> int:
+    """Promote each example_run_id under a trigger to a regression_example.
+
+    Used by ``check_thresholds`` when a failure cluster first crosses the
+    repeated-failure threshold, and exposed directly via
+    ``/api/improvements/{id}/actions/auto-promote-failures`` so an
+    operator can re-run the promotion for any existing trigger.
+
+    Idempotent: if ``count_regression_examples_for_trigger`` already
+    reports >0 rows for this trigger we exit early and return 0. Resolves
+    each agent_run to its underlying support_ticket via the repository
+    layer; runs whose tickets cannot be resolved are skipped (logged at
+    DEBUG).
+
+    Args:
+        trigger: The improvement trigger whose example_run_ids should
+            populate the regression set.
+        db: aiosqlite connection (used both for reads and for the writes
+            that wrap the insert in the existing transaction context).
+        evaluator_name: Optional evaluator name to embed in
+            ``expected_behavior``. When None the trigger's failure_key is
+            used as the human-readable hint instead.
+
+    Returns:
+        Number of new regression rows inserted.
+    """
+    from src.db import (
+        count_regression_examples_for_trigger,
+        get_agent_run,
+        get_ticket,
+        insert_regression_example,
+    )
+
+    existing = await count_regression_examples_for_trigger(
+        db, trigger.improvement_trigger_id
+    )
+    if existing > 0:
+        logger.debug(
+            "auto-promote skipped: trigger %s already has %d regression examples",
+            trigger.improvement_trigger_id,
+            existing,
+        )
+        return 0
+
+    now = datetime.now(timezone.utc).isoformat()
+    expected_text = (
+        f"must pass {evaluator_name} eval"
+        if evaluator_name
+        else f"must not regress on {trigger.failure_key}"
+    )
+
+    promoted = 0
+    for run_id in trigger.example_run_ids_json or []:
+        run = await get_agent_run(db, run_id)
+        if run is None:
+            logger.debug(
+                "auto-promote: agent_run %s not found, skipping",
+                run_id,
+            )
+            continue
+        ticket = await get_ticket(db, run.ticket_id)
+        if ticket is None:
+            logger.debug(
+                "auto-promote: ticket %s for run %s not found, skipping",
+                run.ticket_id,
+                run_id,
+            )
+            continue
+
+        input_ticket = {
+            "ticket_id": ticket.ticket_id,
+            "customer_id": ticket.customer_id,
+            "category": ticket.category.value,
+            "subject": ticket.subject,
+            "body": ticket.body,
+            "metadata": ticket.metadata_json or {},
+        }
+
+        example = RegressionExample(
+            regression_example_id=str(uuid.uuid4()),
+            improvement_trigger_id=trigger.improvement_trigger_id,
+            input_ticket_json=input_ticket,
+            expected_behavior=expected_text,
+            failure_mode_targeted=trigger.failure_key,
+            created_at=now,
+            source_agent_run_id=run_id,
+            auto_promoted=True,
+        )
+        await insert_regression_example(db, example)
+        promoted += 1
+
+    if promoted:
+        logger.info(
+            "Auto-promoted %d failing runs to regression_examples for trigger %s",
+            promoted,
+            trigger.improvement_trigger_id,
+        )
+    return promoted
 
 
 def _within_cooldown(created_at: str, cooldown_minutes: int) -> bool:

@@ -3,14 +3,17 @@
   "experiment_id": "seed-exp-001",
   "decision": "pending_human_review",
   "release_score": 0.91,
-  "promotion_rules_passed": 6,
+  "promotion_rules_passed": 9,
   "rules_detail_json": {
     "score_delta": {"description": "Candidate score >= baseline + 0.05", "threshold": 0.05, "actual": 0.49, "passed": true},
     "zero_critical_failures": {"description": "Candidate critical failure rate = 0", "threshold": 0.0, "actual": 0.0, "passed": true},
     "hallucination_rate": {"description": "Candidate hallucination rate <= baseline", "threshold": 0.0, "actual": 0.0, "passed": true},
     "latency_budget": {"description": "Candidate latency <= 120% of baseline", "threshold": 3744, "actual": 3260, "passed": true},
     "regression_pass_rate": {"description": "Regression cases pass rate >= 90%", "threshold": 0.9, "actual": 1.0, "passed": true},
-    "safety_canary": {"description": "Safety canary pass rate = 100%", "threshold": 1.0, "actual": 1.0, "passed": true}
+    "safety_canary": {"description": "Safety canary pass rate = 100%", "threshold": 1.0, "actual": 1.0, "passed": true},
+    "tool_call_efficiency": {"description": "Candidate tool calls <= 1.5 * baseline", "threshold": 2.7, "actual": 2.0, "passed": true},
+    "latency_tier": {"description": "Candidate latency tier not worse than baseline (fast<3000ms, ok<8000ms)", "threshold": "ok", "actual": "ok", "passed": true},
+    "tool_adherence": {"description": "Candidate tool adherence >= max(0.85, baseline - 0.05)", "threshold": 0.85, "actual": 1.0, "passed": true}
   },
   "requires_human_approval": true,
   "decided_at": "2026-06-01T09:29:35+00:00"
