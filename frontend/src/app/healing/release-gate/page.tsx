@@ -52,10 +52,10 @@ interface NormalizedRule {
 // order from the deprecated GateChecklist.
 const QUALITY_RULE_NAMES = [
   "score_delta",
-  "critical_failure",
-  "hallucination",
-  "latency",
-  "regression",
+  "zero_critical_failures",
+  "hallucination_rate",
+  "latency_budget",
+  "regression_pass_rate",
   "safety_canary",
 ] as const;
 

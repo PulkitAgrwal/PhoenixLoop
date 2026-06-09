@@ -7,5 +7,6 @@
   "source": "diagnosis_proposal",
   "improvement_trigger_id": "seed-trig-cit-001",
   "created_at": "2026-06-01T09:27:30+00:00",
-  "metadata_json": {"seeded_via": "LIGHTWEIGHT_DEMO"}
+  "metadata_json": {"seeded_via": "LIGHTWEIGHT_DEMO"},
+  "change_class": "prompt_addition"
 }

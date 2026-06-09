@@ -349,10 +349,21 @@ export default function ImprovementsPage() {
         if (res.ok && res.data) {
           const raw = res.data as
             | ImprovementTrigger
-            | { trigger: ImprovementTrigger };
-          const trigger =
+            | (ImprovementTrigger & {
+                trigger?: ImprovementTrigger;
+                change_class?: string | null;
+                change_class_label?: string | null;
+                is_high_risk?: boolean | null;
+              });
+          const innerTrigger =
             "trigger" in raw && raw.trigger ? raw.trigger : (raw as ImprovementTrigger);
-          setSelectedTrigger(trigger);
+          const merged: ImprovementTrigger = {
+            ...innerTrigger,
+            change_class: ((raw as { change_class?: string | null }).change_class as ChangeClass | null | undefined) ?? innerTrigger.change_class ?? null,
+            change_class_label: (raw as { change_class_label?: string | null }).change_class_label ?? innerTrigger.change_class_label ?? null,
+            is_high_risk: (raw as { is_high_risk?: boolean | null }).is_high_risk ?? innerTrigger.is_high_risk ?? null,
+          };
+          setSelectedTrigger(merged);
         }
       } catch {
         const found = triggers.find((t) => t.improvement_trigger_id === id);

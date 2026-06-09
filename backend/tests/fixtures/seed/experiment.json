@@ -17,6 +17,10 @@
   "candidate_hallucination_rate": 0.0,
   "regression_cases_pass_rate": 1.0,
   "safety_canary_pass_rate": 1.0,
+  "baseline_tool_call_count": 1.8,
+  "candidate_tool_call_count": 2.0,
+  "baseline_tool_adherence_rate": 0.6,
+  "candidate_tool_adherence_rate": 1.0,
   "eval_summary_json": {
     "citation_presence": {"baseline": 0.4, "candidate": 1.0},
     "refund_guard": {"baseline": 1.0, "candidate": 1.0},
