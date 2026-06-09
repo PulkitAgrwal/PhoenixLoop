@@ -23,15 +23,18 @@
   </tr>
   <tr>
     <td><img src="frontend/public/screenshots/prompt-diff.png" alt="Prompt diff — candidate v1.1-refund-citation-required appends the rule &quot;For any refund-category response, you MUST call search_policy and cite at least one POL-REFUND-XXX&quot;" /></td>
-    <td><img src="frontend/public/screenshots/release-gate.png" alt="Release gate verdict — score 91.4/100, 6/6 promotion rules passed, Score Delta +0.490 (target ≥ 0.050)" /></td>
+    <td><img src="frontend/public/screenshots/release-gate.png" alt="Release gate verdict — score 85.7/100, 9/9 promotion rules passed (6 quality + 3 efficiency), pending human review" /></td>
   </tr>
   <tr>
-    <td><img src="frontend/public/screenshots/experiments-scoreboard.png" alt="Experiments scoreboard — baseline v1.0.0 release score 0.42 vs candidate 0.91 (+117%), regression canaries 100%, safety canaries 100%" /></td>
+    <td><img src="frontend/public/screenshots/experiments-scoreboard.png" alt="Experiments scoreboard — baseline v1.0.0 vs live candidate, side-by-side metric comparison, regression canaries 86%, safety canaries 100%" /></td>
     <td><img src="frontend/public/screenshots/activity-runs.png" alt="Activity → Runs — every ADK agent_run captured by Phoenix with status, eval results, latency" /></td>
   </tr>
   <tr>
     <td><img src="frontend/public/screenshots/conversation.png" alt="Conversation page — Refund-timing scenario loaded, customer message visible, Production prompt v1.0.0 badge top-right, LIVE TRACE panel on the right" /></td>
     <td><img src="frontend/public/screenshots/prompts.png" alt="Prompts page — v1.0.0 seed + v1.1-refund-citation-required candidate, full prompt text scrollable" /></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="frontend/public/screenshots/settings-canary.png" alt="Settings → Judge calibration — Cohen's κ + accuracy + N per LLM judge against the 44-row seeded canary set; policy_compliance κ=0.84, safety_privacy κ=0.56" /></td>
   </tr>
 </table>
 
