@@ -14,12 +14,16 @@ import aiosqlite
 from src.models import (
     AgentRun,
     AuditEvent,
+    CanaryLabel,
+    CanaryRun,
+    ChangeClass,
     ConversationSession,
     EvalResult,
     ExperimentRecord,
     FailureAggregate,
     HumanApproval,
     ImprovementTrigger,
+    JudgeLabel,
     Prompt,
     PromptSource,
     PromptVersion,
@@ -27,6 +31,7 @@ from src.models import (
     ReleaseDecision,
     ReleaseGateDecision,
     SupportTicket,
+    TicketCategory,
     ToolCallRecord,
 )
 
@@ -215,7 +220,75 @@ CREATE TABLE IF NOT EXISTS prompt_versions (
 
 CREATE INDEX IF NOT EXISTS idx_prompt_versions_identifier ON prompt_versions(prompt_identifier);
 CREATE INDEX IF NOT EXISTS idx_prompt_versions_parent ON prompt_versions(parent_version_id);
+
+CREATE TABLE IF NOT EXISTS canary_labels (
+    canary_label_id    TEXT PRIMARY KEY,
+    fixture_id         TEXT NOT NULL,
+    ticket_category    TEXT NOT NULL,
+    judge_name         TEXT NOT NULL,
+    expected_label     TEXT NOT NULL,
+    rationale          TEXT NOT NULL,
+    created_at         TEXT NOT NULL,
+    UNIQUE(fixture_id, judge_name)
+);
+CREATE INDEX IF NOT EXISTS idx_canary_judge ON canary_labels(judge_name);
+
+CREATE TABLE IF NOT EXISTS canary_runs (
+    canary_run_id      TEXT PRIMARY KEY,
+    canary_label_id    TEXT NOT NULL REFERENCES canary_labels(canary_label_id),
+    judge_name         TEXT NOT NULL,
+    predicted_label    TEXT NOT NULL,
+    evidence_json      TEXT NOT NULL DEFAULT '[]',
+    explanation        TEXT,
+    judge_model        TEXT NOT NULL,
+    created_at         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_canary_runs_judge ON canary_runs(judge_name);
+CREATE INDEX IF NOT EXISTS idx_canary_runs_label ON canary_runs(canary_label_id);
 """
+
+
+# ---------------------------------------------------------------------------
+# Idempotent column migrations
+# ---------------------------------------------------------------------------
+
+# (table, column, type) tuples applied after _CREATE_TABLES_SQL. SQLite
+# ALTER TABLE has no IF NOT EXISTS clause, so we catch "duplicate column
+# name" errors to keep init_db idempotent across repeat runs.
+_COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
+    ("prompt_versions", "change_class", "TEXT"),
+    ("experiments", "baseline_tool_call_count", "REAL"),
+    ("experiments", "candidate_tool_call_count", "REAL"),
+    ("experiments", "baseline_tool_adherence_rate", "REAL"),
+    ("experiments", "candidate_tool_adherence_rate", "REAL"),
+    ("eval_results", "rubric_version", "TEXT"),
+    ("eval_results", "evidence_json", "TEXT DEFAULT '[]'"),
+    ("regression_examples", "source_agent_run_id", "TEXT"),
+    ("regression_examples", "auto_promoted", "INTEGER NOT NULL DEFAULT 0"),
+]
+
+
+async def _apply_column_migrations(db: aiosqlite.Connection) -> None:
+    """Apply additive ALTER TABLE migrations idempotently.
+
+    SQLite raises ``OperationalError: duplicate column name: <col>`` when
+    a column already exists; we treat that as success so repeated init
+    calls are a no-op. Any other OperationalError is re-raised.
+    """
+    for table, column, column_type in _COLUMN_MIGRATIONS:
+        statement = f"ALTER TABLE {table} ADD COLUMN {column} {column_type}"
+        try:
+            await db.execute(statement)
+        except aiosqlite.OperationalError as exc:
+            if "duplicate column name" in str(exc).lower():
+                logger.debug(
+                    "Column %s.%s already present; skipping migration",
+                    table,
+                    column,
+                )
+                continue
+            raise
+    await db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +302,7 @@ async def init_db(db_path: str) -> None:
         db.row_factory = aiosqlite.Row
         await db.executescript(_CREATE_TABLES_SQL)
         await db.commit()
+        await _apply_column_migrations(db)
         await _seed_default_prompt(db)
     logger.info("Database initialized successfully")
 
@@ -538,6 +612,12 @@ async def resolve_trace_ids(
 
 def _eval_result_from_row(row: aiosqlite.Row) -> EvalResult:
     """Deserialize an eval_results row into an EvalResult model."""
+    evidence_raw = _json_loads(row["evidence_json"], default=[])
+    evidence_list: list[str] = (
+        [str(item) for item in evidence_raw]
+        if isinstance(evidence_raw, list)
+        else []
+    )
     return EvalResult(
         eval_result_id=row["eval_result_id"],
         agent_run_id=row["agent_run_id"],
@@ -552,6 +632,8 @@ def _eval_result_from_row(row: aiosqlite.Row) -> EvalResult:
         span_id=row["span_id"],
         metadata_json=_json_loads(row["metadata_json"]),  # type: ignore[arg-type]
         created_at=row["created_at"],
+        rubric_version=row["rubric_version"],
+        evidence_json=evidence_list,
     )
 
 
@@ -561,8 +643,9 @@ async def insert_eval_result(db: aiosqlite.Connection, result: EvalResult) -> No
         """INSERT INTO eval_results
            (eval_result_id, agent_run_id, evaluator_name, eval_type,
             score, outcome, explanation, failure_key, failure_summary,
-            annotation_level, span_id, metadata_json, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            annotation_level, span_id, metadata_json, created_at,
+            rubric_version, evidence_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             result.eval_result_id,
             result.agent_run_id,
@@ -577,6 +660,8 @@ async def insert_eval_result(db: aiosqlite.Connection, result: EvalResult) -> No
             result.span_id,
             _json_dumps(result.metadata_json) if result.metadata_json is not None else "{}",
             result.created_at,
+            result.rubric_version,
+            _json_dumps(result.evidence_json),
         ),
     )
     await db.commit()
@@ -795,6 +880,8 @@ def _regression_example_from_row(row: aiosqlite.Row) -> RegressionExample:
         phoenix_dataset_id=row["phoenix_dataset_id"],
         uploaded_at=row["uploaded_at"],
         created_at=row["created_at"],
+        source_agent_run_id=row["source_agent_run_id"],
+        auto_promoted=bool(row["auto_promoted"]),
     )
 
 
@@ -806,8 +893,8 @@ async def insert_regression_example(
         """INSERT INTO regression_examples
            (regression_example_id, improvement_trigger_id, input_ticket_json,
             expected_behavior, failure_mode_targeted, phoenix_dataset_id,
-            uploaded_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            uploaded_at, created_at, source_agent_run_id, auto_promoted)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             example.regression_example_id,
             example.improvement_trigger_id,
@@ -817,9 +904,44 @@ async def insert_regression_example(
             example.phoenix_dataset_id,
             example.uploaded_at,
             example.created_at,
+            example.source_agent_run_id,
+            int(example.auto_promoted),
         ),
     )
     await db.commit()
+
+
+async def list_regression_examples_auto_promoted(
+    db: aiosqlite.Connection, limit: int = 50
+) -> list[RegressionExample]:
+    """Most-recent auto-promoted regression examples, newest first.
+
+    Surfaces rows produced by the failure-trace auto-promote path so the
+    UI can distinguish them from manual diagnosis-derived examples.
+    """
+    cursor = await db.execute(
+        "SELECT * FROM regression_examples WHERE auto_promoted = 1 "
+        "ORDER BY created_at DESC LIMIT ?",
+        (limit,),
+    )
+    rows = await cursor.fetchall()
+    return [_regression_example_from_row(r) for r in rows]
+
+
+async def count_regression_examples_for_trigger(
+    db: aiosqlite.Connection, trigger_id: str
+) -> int:
+    """Return how many regression examples exist for an improvement trigger.
+
+    Used by the auto-promote dedup check to avoid promoting the same
+    failure trace twice under the same trigger.
+    """
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM regression_examples WHERE improvement_trigger_id = ?",
+        (trigger_id,),
+    )
+    row = await cursor.fetchone()
+    return int(row[0]) if row is not None else 0
 
 
 async def get_regression_examples_for_trigger(
@@ -886,6 +1008,10 @@ def _experiment_from_row(row: aiosqlite.Row) -> ExperimentRecord:
         baseline_prompt_version_id=row["baseline_prompt_version_id"],
         candidate_prompt_version_id=row["candidate_prompt_version_id"],
         created_at=row["created_at"],
+        baseline_tool_call_count=row["baseline_tool_call_count"],
+        candidate_tool_call_count=row["candidate_tool_call_count"],
+        baseline_tool_adherence_rate=row["baseline_tool_adherence_rate"],
+        candidate_tool_adherence_rate=row["candidate_tool_adherence_rate"],
     )
 
 
@@ -905,8 +1031,10 @@ async def insert_experiment(
             regression_cases_pass_rate, safety_canary_pass_rate,
             eval_summary_json, started_at, completed_at,
             baseline_prompt_version_id, candidate_prompt_version_id,
-            created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            created_at,
+            baseline_tool_call_count, candidate_tool_call_count,
+            baseline_tool_adherence_rate, candidate_tool_adherence_rate)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             exp.experiment_id,
             exp.improvement_trigger_id,
@@ -932,6 +1060,10 @@ async def insert_experiment(
             exp.baseline_prompt_version_id,
             exp.candidate_prompt_version_id,
             exp.created_at,
+            exp.baseline_tool_call_count,
+            exp.candidate_tool_call_count,
+            exp.baseline_tool_adherence_rate,
+            exp.candidate_tool_adherence_rate,
         ),
     )
     await db.commit()
@@ -956,7 +1088,9 @@ async def update_experiment(
            candidate_hallucination_rate = ?,
            regression_cases_pass_rate = ?, safety_canary_pass_rate = ?,
            eval_summary_json = ?, started_at = ?, completed_at = ?,
-           baseline_prompt_version_id = ?, candidate_prompt_version_id = ?
+           baseline_prompt_version_id = ?, candidate_prompt_version_id = ?,
+           baseline_tool_call_count = ?, candidate_tool_call_count = ?,
+           baseline_tool_adherence_rate = ?, candidate_tool_adherence_rate = ?
            WHERE experiment_id = ?""",
         (
             exp.improvement_trigger_id,
@@ -981,6 +1115,10 @@ async def update_experiment(
             exp.completed_at,
             exp.baseline_prompt_version_id,
             exp.candidate_prompt_version_id,
+            exp.baseline_tool_call_count,
+            exp.candidate_tool_call_count,
+            exp.baseline_tool_adherence_rate,
+            exp.candidate_tool_adherence_rate,
             exp.experiment_id,
         ),
     )
@@ -1346,6 +1484,8 @@ def _prompt_from_row(row: aiosqlite.Row) -> Prompt:
 
 def _prompt_version_from_row(row: aiosqlite.Row) -> PromptVersion:
     """Deserialize a prompt_versions row into a PromptVersion model."""
+    raw_change_class = row["change_class"]
+    change_class = ChangeClass(raw_change_class) if raw_change_class else None
     return PromptVersion(
         prompt_version_id=row["prompt_version_id"],
         prompt_identifier=row["prompt_identifier"],
@@ -1356,6 +1496,7 @@ def _prompt_version_from_row(row: aiosqlite.Row) -> PromptVersion:
         improvement_trigger_id=row["improvement_trigger_id"],
         created_at=row["created_at"],
         metadata_json=_json_loads(row["metadata_json"], default={}),  # type: ignore[arg-type]
+        change_class=change_class,
     )
 
 
@@ -1407,8 +1548,8 @@ async def insert_prompt_version(
         """INSERT INTO prompt_versions
            (prompt_version_id, prompt_identifier, version_tag, prompt_text,
             parent_version_id, source, improvement_trigger_id, created_at,
-            metadata_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            metadata_json, change_class)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             pv.prompt_version_id,
             pv.prompt_identifier,
@@ -1419,6 +1560,7 @@ async def insert_prompt_version(
             pv.improvement_trigger_id,
             pv.created_at,
             _json_dumps(pv.metadata_json),
+            pv.change_class.value if pv.change_class is not None else None,
         ),
     )
     await db.commit()
@@ -1472,6 +1614,218 @@ async def set_active_version(
         ),
     )
     await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# CRUD — Canary Labels & Canary Runs
+# ---------------------------------------------------------------------------
+
+def _canary_label_from_row(row: aiosqlite.Row) -> CanaryLabel:
+    """Deserialize a canary_labels row into a CanaryLabel model."""
+    return CanaryLabel(
+        canary_label_id=row["canary_label_id"],
+        fixture_id=row["fixture_id"],
+        ticket_category=TicketCategory(row["ticket_category"]),
+        judge_name=row["judge_name"],
+        expected_label=JudgeLabel(row["expected_label"]),
+        rationale=row["rationale"],
+        created_at=row["created_at"],
+    )
+
+
+def _canary_run_from_row(row: aiosqlite.Row) -> CanaryRun:
+    """Deserialize a canary_runs row into a CanaryRun model."""
+    evidence_raw = _json_loads(row["evidence_json"], default=[])
+    evidence_list: list[str] = (
+        [str(item) for item in evidence_raw]
+        if isinstance(evidence_raw, list)
+        else []
+    )
+    return CanaryRun(
+        canary_run_id=row["canary_run_id"],
+        canary_label_id=row["canary_label_id"],
+        judge_name=row["judge_name"],
+        predicted_label=JudgeLabel(row["predicted_label"]),
+        evidence_json=evidence_list,
+        explanation=row["explanation"],
+        judge_model=row["judge_model"],
+        created_at=row["created_at"],
+    )
+
+
+async def insert_canary_label(
+    db: aiosqlite.Connection, label: CanaryLabel
+) -> None:
+    """Insert a canary label row.
+
+    Idempotent against UNIQUE(fixture_id, judge_name): callers may use
+    INSERT OR REPLACE semantics by deleting the existing row first; this
+    function uses plain INSERT to surface accidental duplicates.
+    """
+    await db.execute(
+        """INSERT INTO canary_labels
+           (canary_label_id, fixture_id, ticket_category, judge_name,
+            expected_label, rationale, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            label.canary_label_id,
+            label.fixture_id,
+            label.ticket_category.value,
+            label.judge_name,
+            label.expected_label.value,
+            label.rationale,
+            label.created_at,
+        ),
+    )
+    await db.commit()
+
+
+async def get_canary_label(
+    db: aiosqlite.Connection, canary_label_id: str
+) -> CanaryLabel | None:
+    """Fetch a single canary label by id."""
+    cursor = await db.execute(
+        "SELECT * FROM canary_labels WHERE canary_label_id = ?",
+        (canary_label_id,),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    return _canary_label_from_row(row)
+
+
+async def list_canary_labels(
+    db: aiosqlite.Connection, judge_name: str | None
+) -> list[CanaryLabel]:
+    """List canary labels, optionally filtered by judge_name."""
+    if judge_name is not None:
+        cursor = await db.execute(
+            "SELECT * FROM canary_labels WHERE judge_name = ? "
+            "ORDER BY fixture_id ASC",
+            (judge_name,),
+        )
+    else:
+        cursor = await db.execute(
+            "SELECT * FROM canary_labels ORDER BY judge_name ASC, fixture_id ASC"
+        )
+    rows = await cursor.fetchall()
+    return [_canary_label_from_row(r) for r in rows]
+
+
+async def insert_canary_run(
+    db: aiosqlite.Connection, run: CanaryRun
+) -> None:
+    """Insert a canary run row (one judge prediction on one canary fixture)."""
+    await db.execute(
+        """INSERT INTO canary_runs
+           (canary_run_id, canary_label_id, judge_name, predicted_label,
+            evidence_json, explanation, judge_model, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            run.canary_run_id,
+            run.canary_label_id,
+            run.judge_name,
+            run.predicted_label.value,
+            _json_dumps(run.evidence_json),
+            run.explanation,
+            run.judge_model,
+            run.created_at,
+        ),
+    )
+    await db.commit()
+
+
+async def list_canary_runs(
+    db: aiosqlite.Connection,
+    judge_name: str | None,
+    limit: int = 1000,
+) -> list[CanaryRun]:
+    """List canary runs newest-first, optionally filtered by judge_name."""
+    if judge_name is not None:
+        cursor = await db.execute(
+            "SELECT * FROM canary_runs WHERE judge_name = ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (judge_name, limit),
+        )
+    else:
+        cursor = await db.execute(
+            "SELECT * FROM canary_runs ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        )
+    rows = await cursor.fetchall()
+    return [_canary_run_from_row(r) for r in rows]
+
+
+async def list_canary_runs_paired_with_labels(
+    db: aiosqlite.Connection, judge_name: str
+) -> list[tuple[CanaryLabel, CanaryRun]]:
+    """Return (label, latest_run) pairs for a judge, used by kappa computation.
+
+    Pairs each canary label with its *most recent* canary run for the
+    given judge, joined on canary_label_id. Labels with no runs are
+    excluded — kappa is defined only over paired observations.
+    """
+    cursor = await db.execute(
+        """SELECT
+              l.canary_label_id    AS l_canary_label_id,
+              l.fixture_id         AS l_fixture_id,
+              l.ticket_category    AS l_ticket_category,
+              l.judge_name         AS l_judge_name,
+              l.expected_label     AS l_expected_label,
+              l.rationale          AS l_rationale,
+              l.created_at         AS l_created_at,
+              r.canary_run_id      AS r_canary_run_id,
+              r.canary_label_id    AS r_canary_label_id,
+              r.judge_name         AS r_judge_name,
+              r.predicted_label    AS r_predicted_label,
+              r.evidence_json      AS r_evidence_json,
+              r.explanation        AS r_explanation,
+              r.judge_model        AS r_judge_model,
+              r.created_at         AS r_created_at
+           FROM canary_labels l
+           JOIN canary_runs r
+             ON r.canary_label_id = l.canary_label_id
+            AND r.judge_name = l.judge_name
+            AND r.created_at = (
+                SELECT MAX(r2.created_at)
+                  FROM canary_runs r2
+                 WHERE r2.canary_label_id = l.canary_label_id
+                   AND r2.judge_name = l.judge_name
+            )
+           WHERE l.judge_name = ?
+           ORDER BY l.fixture_id ASC""",
+        (judge_name,),
+    )
+    rows = await cursor.fetchall()
+    paired: list[tuple[CanaryLabel, CanaryRun]] = []
+    for r in rows:
+        evidence_raw = _json_loads(r["r_evidence_json"], default=[])
+        evidence_list: list[str] = (
+            [str(item) for item in evidence_raw]
+            if isinstance(evidence_raw, list)
+            else []
+        )
+        label = CanaryLabel(
+            canary_label_id=r["l_canary_label_id"],
+            fixture_id=r["l_fixture_id"],
+            ticket_category=TicketCategory(r["l_ticket_category"]),
+            judge_name=r["l_judge_name"],
+            expected_label=JudgeLabel(r["l_expected_label"]),
+            rationale=r["l_rationale"],
+            created_at=r["l_created_at"],
+        )
+        run = CanaryRun(
+            canary_run_id=r["r_canary_run_id"],
+            canary_label_id=r["r_canary_label_id"],
+            judge_name=r["r_judge_name"],
+            predicted_label=JudgeLabel(r["r_predicted_label"]),
+            evidence_json=evidence_list,
+            explanation=r["r_explanation"],
+            judge_model=r["r_judge_model"],
+            created_at=r["r_created_at"],
+        )
+        paired.append((label, run))
+    return paired
 
 
 # ---------------------------------------------------------------------------
