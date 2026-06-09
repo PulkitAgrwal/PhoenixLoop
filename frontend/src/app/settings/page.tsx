@@ -14,6 +14,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
+import { CanaryTable } from "@/components/shared/canary-table";
 import { PhoenixDeepLink } from "@/components/shared/phoenix-deep-link";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
@@ -517,10 +518,24 @@ export default function SettingsPage() {
       </motion.section>
 
       {/* ------------------------------------------------------------------ */}
-      {/* Diagnostic Actions                                                   */}
+      {/* Judge calibration (Cohen's kappa canary)                             */}
       {/* ------------------------------------------------------------------ */}
       <motion.section
         custom={3}
+        initial="hidden"
+        animate="visible"
+        variants={fadeUpVariants}
+        className="space-y-3"
+      >
+        <h2 className="text-base font-semibold">Judge calibration</h2>
+        <CanaryTable />
+      </motion.section>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Diagnostic Actions                                                   */}
+      {/* ------------------------------------------------------------------ */}
+      <motion.section
+        custom={4}
         initial="hidden"
         animate="visible"
         variants={fadeUpVariants}
@@ -590,7 +605,7 @@ export default function SettingsPage() {
       {/* Phoenix Cloud workspace                                              */}
       {/* ------------------------------------------------------------------ */}
       <motion.section
-        custom={4}
+        custom={5}
         initial="hidden"
         animate="visible"
         variants={fadeUpVariants}

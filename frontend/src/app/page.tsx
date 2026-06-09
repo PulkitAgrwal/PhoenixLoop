@@ -243,6 +243,10 @@ type Stats = {
   evaluators_wired: number;
   mcp_tool_calls_per_run_avg: number;
   prompts_auto_promoted: number;
+  baseline_avg_score?: number | null;
+  post_heal_avg_score?: number | null;
+  delta_pct?: number | null;
+  auto_promoted_regression_count?: number;
 };
 
 function StatsStrip() {
@@ -273,6 +277,48 @@ function StatsStrip() {
     { label: "Prompts auto-promoted", value: stats?.prompts_auto_promoted ?? "—", suffix: "release-gate" },
   ];
 
+  // Match-rate lift narrative. Render dimmed dashes when nothing has been
+  // experimented against yet (baseline_avg_score === null). Don't hide.
+  const baseline =
+    stats && typeof stats.baseline_avg_score === "number"
+      ? stats.baseline_avg_score
+      : null;
+  const postHeal =
+    stats && typeof stats.post_heal_avg_score === "number"
+      ? stats.post_heal_avg_score
+      : null;
+  const deltaPct =
+    stats && typeof stats.delta_pct === "number" ? stats.delta_pct : null;
+
+  const liftCells: {
+    label: string;
+    value: string;
+    suffix: string;
+    tone: "ink" | "brand" | "mute";
+  }[] = [
+    {
+      label: "Baseline avg",
+      value: baseline !== null ? baseline.toFixed(2) : "—",
+      suffix: "pre-heal score",
+      tone: baseline !== null ? "ink" : "mute",
+    },
+    {
+      label: "Post-heal avg",
+      value: postHeal !== null ? postHeal.toFixed(2) : "—",
+      suffix: "post-heal score",
+      tone: postHeal !== null ? "ink" : "mute",
+    },
+    {
+      label: "Lift",
+      value:
+        deltaPct !== null
+          ? `${deltaPct >= 0 ? "+" : ""}${deltaPct.toFixed(0)}%`
+          : "—",
+      suffix: "delta",
+      tone: deltaPct !== null && deltaPct > 0 ? "brand" : "mute",
+    },
+  ];
+
   return (
     <section className="border-y border-hairline bg-canvas">
       <div className="mx-auto max-w-[1280px] grid grid-cols-2 lg:grid-cols-4 px-5 lg:px-8">
@@ -300,6 +346,50 @@ function StatsStrip() {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* Match-rate lift mini-strip — keeps cells permanently visible
+          (dimmed dashes if no experiments have shipped yet). */}
+      <div className="border-t border-hairline">
+        <div className="mx-auto max-w-[1280px] px-5 lg:px-8 pt-3 pb-1">
+          <span className="font-mono text-caption uppercase tracking-eyebrow text-mute">
+            {"// match-rate lift"}
+          </span>
+        </div>
+        <div className="mx-auto max-w-[1280px] grid grid-cols-3 px-5 lg:px-8">
+          {liftCells.map((c, i) => {
+            const toneClass =
+              c.tone === "brand"
+                ? "text-brand"
+                : c.tone === "ink"
+                  ? "text-ink-strong"
+                  : "text-mute";
+            return (
+              <div
+                key={c.label}
+                className={
+                  "px-4 py-5 lg:py-6 " +
+                  (i > 0 ? "border-l border-hairline " : "")
+                }
+              >
+                <div
+                  className={
+                    "num-mono text-[26px] leading-[34px] " +
+                    (loaded ? toneClass : "text-mute")
+                  }
+                >
+                  {c.value}
+                </div>
+                <div className="mt-1.5 flex items-center justify-between gap-3">
+                  <span className="text-body-sm text-body">{c.label}</span>
+                  <span className="text-caption uppercase tracking-eyebrow text-mute">
+                    {c.suffix}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </section>
   );

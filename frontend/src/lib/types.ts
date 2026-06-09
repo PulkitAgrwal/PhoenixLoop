@@ -115,6 +115,9 @@ export interface EvalResult {
   span_id: string | null;
   metadata_json: Record<string, unknown> | null;
   created_at: string;
+  // Wave 2a additions for the LLM-judge canary path.
+  rubric_version?: string | null;
+  evidence_json?: string[] | null;
 }
 
 export interface FailureAggregate {
@@ -129,6 +132,15 @@ export interface FailureAggregate {
   computed_at: string;
 }
 
+export type ChangeClass =
+  | "prompt_addition"
+  | "tool_policy"
+  | "routing"
+  | "data_source"
+  | "eval_definition"
+  | "manual_edit"
+  | "seed";
+
 export interface ImprovementTrigger {
   improvement_trigger_id: string;
   failure_key: string;
@@ -141,6 +153,11 @@ export interface ImprovementTrigger {
   status: string;
   created_at: string;
   updated_at: string;
+  // Wave 2a additions — present on `GET /api/improvements/{id}`. May be absent
+  // on list endpoints, hence optional.
+  change_class?: ChangeClass | null;
+  change_class_label?: string | null;
+  is_high_risk?: boolean | null;
 }
 
 export interface RegressionExample {

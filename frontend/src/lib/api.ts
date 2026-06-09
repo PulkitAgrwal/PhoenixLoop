@@ -189,6 +189,10 @@ export const api = {
         evaluators_wired: number;
         mcp_tool_calls_per_run_avg: number;
         prompts_auto_promoted: number;
+        baseline_avg_score: number | null;
+        post_heal_avg_score: number | null;
+        delta_pct: number | null;
+        auto_promoted_regression_count: number;
       }>("/api/stats"),
   },
   prompts: {
