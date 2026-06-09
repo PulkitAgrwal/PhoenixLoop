@@ -4,8 +4,8 @@
 **Project:** PhoenixLoop
 **Submission track:** Arize Track, Google Cloud Rapid Agent Hackathon 2026
 **Demo domain:** Support QA agent for a fictional SaaS named AcmeFlow
-**Last verified:** 2026-06-07
-**PRD version:** 4.0 — rewritten to reflect the built system
+**Last verified:** 2026-06-09
+**PRD version:** 4.1 — newsletter-driven improvements (judge calibration, multi-dim gate, change_class, auto-promote)
 
 ---
 
@@ -140,7 +140,7 @@ The auto-seed runs four demo tickets plus two fail-twins (intentional `CitationP
 │              evals (14 total)                                     │
 │  diagnosis/  failure_aggregator · proposal_generator              │
 │  experiments/ orchestrator (code-evals only, 5-example cap) ·     │
-│              release_gate (6 rules)                               │
+│              release_gate (9 rules: 6 quality + 3 efficiency)     │
 │  tracing/    phoenix.otel.register(auto_instrument=True, batch)   │
 │                                                                   │
 └─────────┬──────────────────────────────────────────┬──────────────┘
@@ -206,8 +206,14 @@ backend/src/
 │   ├── code_evals/                 7 deterministic code evaluators
 │   ├── llm_judges/combined.py      4 judges batched in one Gemini call
 │   │                                  (incl. Phoenix Evals HALLUCINATION +
-│   │                                  QA templates embedded verbatim)
-│   └── tool_evals/combined.py      3 Phoenix tool-evaluators
+│   │                                  QA templates embedded verbatim;
+│   │                                  5-section template, categorical labels,
+│   │                                  JudgeOutput.evidence[])
+│   ├── tool_evals/combined.py      3 Phoenix tool-evaluators
+│   └── canary.py                   Cohen's κ canary set — 44 hand-curated
+│                                      labels (11 fixtures × 4 judges),
+│                                      pure-Python kappa, per-judge confusion
+│                                      matrices
 │
 ├── diagnosis/
 │   ├── failure_aggregator.py       Failure_key clustering + threshold logic
@@ -258,7 +264,9 @@ frontend/src/
 │   │   ├── improvements/page.tsx   Triggers list + DiagnosisTrace + PromptDiff
 │   │   │                             + RegressionList
 │   │   ├── experiments/page.tsx    Scoreboard (baseline vs candidate, ASCII bars)
-│   │   └── release-gate/page.tsx   Decisions list + 6-rule criteria
+│   │   └── release-gate/page.tsx   Decisions list + 9-rule criteria
+│   │                                 (6 quality + 3 efficiency, grouped via
+│   │                                 RuleRow; skipped rows at 60% opacity)
 │   ├── prompts/page.tsx            Master-detail + Edit modal + diff tabs
 │   └── settings/page.tsx           Config readout + health probes
 │
@@ -349,13 +357,21 @@ If MCP is unavailable, the path degrades gracefully to the legacy service-side `
 
 ### 4.6 Path F — Release gate
 
-Six rules — `check_promotion_rules`:
+Nine rules — `check_promotion_rules`. Six quality rules:
 1. Candidate score ≥ baseline + δ
 2. Critical-failure rate ≤ baseline critical-failure rate
 3. Regression canaries pass rate ≥ 90%
 4. Safety canaries pass rate = 100%
 5. Latency p50 within budget
 6. Score above `RELEASE_SCORE_THRESHOLD` (default 0.75)
+
+Plus three multi-dimensional efficiency rules — inspired by the Arize "7 models under one harness" article: best correctness ≠ best system, and pure accuracy gates miss tool-call inflation and latency-tier regressions:
+
+7. **Tool-call efficiency** — `candidate_tool_call_count <= 1.5 * baseline_tool_call_count` (skipped when baseline is null)
+8. **Latency tier** — bucketed `{fast: <3000ms, ok: <8000ms, slow: ≥8000ms}`; candidate's tier index may not exceed baseline's
+9. **Tool adherence** — `candidate_tool_adherence_rate >= max(0.85, baseline_tool_adherence_rate - 0.05)` (skipped when baseline is null)
+
+Each rule's `rules_detail_json` entry is `{name, status: "pass"|"fail"|"skipped", required, actual, description, threshold, passed}`. Skipped rules expose `passed=True` (sentinel) so absence of multi-dim data never flips the verdict to rejected.
 
 Verdicts: `promoted` · `rejected` · `pending_human_review` · `blocked_critical_failure`. On promotion, `set_active_version(prompt_id, candidate_version_id)` flips the local pointer; the next `run_agent` invocation picks up the new prompt. The Phoenix mirror gets the `production` tag for visibility.
 
@@ -419,6 +435,7 @@ healing cycle as Server-Sent Events:
 | Phoenix MCP — datasets | The support agent's `retrieve_similar_resolutions` tool calls Phoenix MCP `get-dataset-examples(dataset='successful-resolutions')`. Top-3 cap. Gracefully degrades when the dataset is absent |
 | Phoenix MCP — prompts | `proposal_generator` calls MCP `upsert-prompt` to mirror the candidate version; release-gate approval calls `add-prompt-version-tag` with `production` |
 | Experiments | Local `experiments` rows are canonical. Phoenix experiment IDs (`phoenix_experiment_id_baseline` / `phoenix_experiment_id_candidate`) are recorded for deep-link |
+| Judge calibration (canary) | Hand-curated canary set sourced from the deterministic seed fixtures validates the 4 LLM judges before any kappa is reported. The `canary_labels` ground truth + `canary_runs` predictions feed Cohen's κ per judge; the Settings page surfaces κ, accuracy, and a 3×3 confusion matrix so judge prompt drift is caught before it pollutes release-gate scores |
 
 ### Phoenix write strategy
 
@@ -438,6 +455,8 @@ Prompts are mirrored to Phoenix, not authored there. The local DB stays canonica
 | `retrieve_similar_resolutions` | Phoenix-MCP-backed few-shot retriever (top-3 from `successful-resolutions` dataset, in-process TTL cache 5 min) | `(category: str, brief: str) -> list[ResolutionExample]` |
 
 Consolidated from the original 6-tool surface. `draft_customer_response` was deleted entirely — the model IS the language model; tool calls that just echo the response schema force a pointless Gemini→tool→Gemini ping-pong.
+
+The diagnosis sub-agent has a separate, narrower tool surface — **3 tools** (was 2 MCP-only): `phoenix-mcp:get-spans`, `phoenix-mcp:get-span-annotations`, and `extract_categories(failure_key)`. `extract_categories` is an LLM-driven failure-mode clustering tool (inspired by Alyx's `extract_categories` + `assign_categories`) — it calls Gemini once per failure cluster to produce up to 5 mutually exclusive failure-mode categories from the cluster's spans + annotations, and the result is included in the diagnosis `evidence_summary`.
 
 ### 6.2 Models
 
@@ -480,7 +499,13 @@ ADK 1.18 `output_schema × tools` is incompatible (`llm_agent.py:301-307`). We u
 | `policy_compliance` | Custom — encodes AcmeFlow-specific [P-XXX] format + refund-window logic |
 | `safety_privacy` | Custom — refusal language for privacy-sensitive requests |
 
-All four batched into one Gemini call (`CombinedLLMJudges`). Zero extra round-trips per run.
+All four are batched into one Gemini call (`CombinedLLMJudges`). Zero extra round-trips per run.
+
+**5-section judge template.** Every judge prompt — including the two Phoenix Evals templates (`HALLUCINATION_PROMPT_TEMPLATE` + `QA_PROMPT_TEMPLATE` are still embedded verbatim inside the batched call) — is wrapped in a strict 5-section template: (1) evaluation target, (2) inputs, (3) labels, (4) decision rules with explicit edge cases per judge, (5) one worked example per label. Numeric confidence scales were removed deliberately — they invited spurious precision and made comparison across judge versions ambiguous.
+
+**Categorical labels only.** Each judge emits one of three categorical labels: `pass | fail | insufficient_evidence`. `insufficient_evidence` maps to `score=None` so it does not dilute release-gate roll-ups when the judge legitimately cannot decide.
+
+**`JudgeOutput.evidence[]`.** The judge response schema is `JudgeOutput(label, explanation, evidence[])` where `evidence[]` is a list of *literal* quoted snippets from the agent output (or its tool outputs) that ground the verdict. The `eval_results` row persists this as `evidence_json: list[str]` alongside a `rubric_version` tag (e.g. `groundedness_v1`) so every score carries the rubric it was scored against. This is the "trace-and-evals as agent-consumable payload" principle from the Arize harness article: the next-loop diagnosis sub-agent can grep the evidence column instead of re-reading the original spans.
 
 ### 7.3 Phoenix tool evals (3)
 
@@ -493,6 +518,28 @@ failure_key = f"{evaluator_name}__{ticket_category}".lower()
 ```
 
 Deterministic. Stable across runs. Drives the failure-aggregator clustering.
+
+### 7.5 Judge calibration — Cohen's κ canary
+
+LLM judges drift. Without calibration the release-gate's quality signal is whatever the judges happened to say this week. PhoenixLoop ships a hand-curated canary set + Cohen's κ to keep judge prompts honest as they evolve.
+
+**Canary fixture set.** `backend/tests/fixtures/canary/canary_labels.json` carries **44 ground-truth labels** — 11 hand-curated fixtures × 4 judges. Fixtures cover refund-cited, refund-uncited, refund-unauthorized-promise, privacy-leak, legal-escalated, legal-not-escalated, admin-access-cited, fabricated-policy-code, ambiguous-clarify, outage-credit-cited, billing-faq-no-policy. Each row carries `(fixture_id, ticket_category, judge_name, expected_label, rationale)`.
+
+**Kappa formula.** Pure-Python implementation in `backend/src/evaluation/canary.py` — no scipy dependency. For raters A (LLM judge) and B (human ground truth) on the same items with categorical labels:
+
+```
+kappa = (po - pe) / (1 - pe)
+```
+
+where `po` is observed agreement and `pe` is expected agreement by chance computed from per-label marginals. The label space is the three-way `{pass, fail, insufficient_evidence}`. Landis-Koch interpretation: κ ≥ 0.6 is substantial agreement, 0.2–0.6 is fair-to-moderate, < 0.2 means the judge prompt needs work.
+
+**API endpoints.**
+
+- `POST /api/evals/canary/load` — idempotent loader for `canary_labels.json` into the `canary_labels` table.
+- `POST /api/evals/canary/run` — runs the 4-judge combined call once per fixture (the batch is shared across judges; ~11 Gemini calls for a full run), persists one `canary_runs` row per `(fixture, judge)`. Optional `?judge_name=` scopes persisted rows to a single judge.
+- `GET /api/evals/canary/kappa` — returns per-judge `{cohens_kappa, accuracy, n_samples, confusion_matrix (3×3), judge_model, computed_at}` envelopes.
+
+**UI surface.** `/settings` renders a `<CanaryTable />` with the 4 judges, their κ (colored by Landis-Koch), accuracy, model, sample size, last-computed timestamp, and an expandable 3×3 confusion matrix per judge. "Load fixtures" and "Recompute" buttons exercise the endpoints from the page.
 
 ---
 
@@ -546,7 +593,7 @@ The `mcp_tools_used` field powers the Diagnosis Trace panel in `/healing/improve
 
 ### 8.4 Release-gate rules
 
-Six rules in `experiments/release_gate.py:check_promotion_rules`:
+Nine rules in `experiments/release_gate.py:check_promotion_rules`. Six quality rules (unchanged):
 
 1. `candidate_score >= baseline_score + delta`
 2. `candidate_critical_failure_rate <= baseline_critical_failure_rate`
@@ -555,25 +602,44 @@ Six rules in `experiments/release_gate.py:check_promotion_rules`:
 5. `candidate_latency_p50_ms <= LATENCY_BUDGET_MS`
 6. `release_score >= RELEASE_SCORE_THRESHOLD`
 
-Verdicts: `promoted`, `rejected`, `pending_human_review`, `blocked_critical_failure`. On `promoted`, the local prompt pointer flips; the next agent run uses the new prompt.
+Plus three multi-dimensional efficiency rules (constants in `release_gate.py`: `TOOL_CALL_INFLATION_THRESHOLD=1.5`, `TOOL_ADHERENCE_FLOOR=0.85`, `TOOL_ADHERENCE_REGRESSION_BUDGET=0.05`, `LATENCY_TIERS={fast:3000, ok:8000, slow:∞}` ms):
+
+7. **Tool-call efficiency** — `candidate_tool_call_count <= 1.5 * baseline_tool_call_count` (skipped when `baseline_tool_call_count is None`)
+8. **Latency tier** — `tier_index(candidate_latency_p50_ms) <= tier_index(baseline_latency_p50_ms)` on bucketed tiers `fast (<3000ms) / ok (<8000ms) / slow (≥8000ms)`
+9. **Tool adherence** — `candidate_tool_adherence_rate >= max(0.85, baseline_tool_adherence_rate - 0.05)` (skipped when `baseline_tool_adherence_rate is None`)
+
+Each rule's `rules_detail_json` entry is `{name, status: "pass"|"fail"|"skipped", required, actual, description, threshold, passed}`. Skipped rules expose `passed=True` as a sentinel so absence of multi-dim data does not flip the gate to rejected on its own.
+
+Verdicts (unchanged): `promoted`, `rejected`, `pending_human_review`, `blocked_critical_failure`. On `promoted`, the local prompt pointer flips; the next agent run uses the new prompt.
 
 ---
 
 ## 9. Data model
 
-13 tables, FK-linked, WAL + `foreign_keys=ON`.
+15 tables, FK-linked, WAL + `foreign_keys=ON`.
 
 | Group | Tables |
 |---|---|
 | Ticket | `tickets` |
 | Run | `agent_runs` (with `trace_id`, `root_span_id`, `phoenix_session_id`, `prompt_version_id` FK) |
-| Eval | `evals`, `failure_aggregates` |
-| Improvement | `improvement_triggers`, `regression_examples` |
-| Experiment | `experiments` (FK: baseline & candidate prompt_version_ids), `release_gate_decisions`, `human_approvals` |
-| Prompt | `prompts`, `prompt_versions` (with `source` enum, `improvement_trigger_id` FK, `parent_version_id`) |
+| Eval | `evals` (with `rubric_version`, `evidence_json` columns), `failure_aggregates` |
+| Improvement | `improvement_triggers`, `regression_examples` (with `source_agent_run_id`, `auto_promoted` columns) |
+| Experiment | `experiments` (FK: baseline & candidate prompt_version_ids; plus `{baseline,candidate}_{tool_call_count,tool_adherence_rate}` columns for the multi-dim gate), `release_gate_decisions`, `human_approvals` |
+| Prompt | `prompts`, `prompt_versions` (with `source` enum, `improvement_trigger_id` FK, `parent_version_id`, `change_class` enum) |
+| Calibration | `canary_labels` (44 hand-curated ground-truth labels — 11 fixtures × 4 judges; `UNIQUE(fixture_id, judge_name)`), `canary_runs` (one per (label, judge) prediction; FK to `canary_labels`) |
 | Cross-cutting | `audit_events` |
 
-Schema details in `backend/src/db.py`. Pydantic models for all data crossing module boundaries in `backend/src/models.py` — no raw dicts in business logic.
+Schema details in `backend/src/db.py`. Pydantic models for all data crossing module boundaries in `backend/src/models.py` — no raw dicts in business logic. Column additions (`change_class`, `evidence_json`, `rubric_version`, `source_agent_run_id`, `auto_promoted`, `{baseline,candidate}_{tool_call_count,tool_adherence_rate}`) are applied additively via `_apply_column_migrations` on every connection so the schema is idempotent.
+
+### 9.1 Change taxonomy
+
+Every diagnosis-generated patch carries a `ChangeClass` enum on `prompt_versions.change_class`:
+
+```
+prompt_addition | tool_policy | routing | data_source | eval_definition | manual_edit | seed
+```
+
+`eval_definition` is flagged as the highest-risk class — it alters the quality standard itself rather than the agent's behavior under that standard (per the Arize harness-and-evals article). The Improvements UI surfaces this with a brand-green left-bordered "High-risk" container above the diagnosis trace. `change_class` defaults to `prompt_addition` if the Gemini parse fails so the patch never blocks on classification failure.
 
 ---
 
@@ -585,12 +651,12 @@ All routes return the response envelope `{ok, data, error, request_id}`. All lis
 |---|---|
 | Tickets | `GET /api/tickets`, `GET /api/tickets/{id}`, `POST /api/tickets/{id}/run`, `POST /api/tickets/{id}/run/stream` (SSE) |
 | Conversations | `GET /api/conversations`, `GET /api/conversations/{id}` |
-| Evals | `GET /api/evals/{run_id}`, `GET /api/failures?active_only=` |
-| Improvements | `GET /api/improvements`, `GET /api/improvements/{id}`, `POST /api/improvements`, `POST .../actions/analyze`, `POST .../actions/generate-regressions` |
+| Evals | `GET /api/evals/{run_id}`, `GET /api/failures?active_only=`, `POST /api/evals/canary/load`, `POST /api/evals/canary/run?judge_name=`, `GET /api/evals/canary/kappa` |
+| Improvements | `GET /api/improvements`, `GET /api/improvements/{id}`, `POST /api/improvements`, `POST .../actions/analyze`, `POST .../actions/generate-regressions`, `POST .../actions/auto-promote-failures` |
 | Experiments | `GET /api/experiments`, `GET /api/experiments/{id}`, `POST /api/experiments` |
 | Release gate | `GET /api/release-gate`, `GET /api/release-gate/{id}`, `POST .../actions/{approve,reject}` |
 | Prompts | `GET /api/prompts`, `GET /api/prompts/{id}`, `GET .../versions`, `GET .../versions/{vid}`, `POST .../versions`, `POST .../versions/{vid}/actions/experiment` |
-| Stats | `GET /api/stats` — `{agent_runs_traced, evaluators_wired, mcp_tool_calls_per_run_avg, prompts_auto_promoted}` |
+| Stats | `GET /api/stats` — `{agent_runs_traced, evaluators_wired, mcp_tool_calls_per_run_avg, prompts_auto_promoted, baseline_avg_score, post_heal_avg_score, delta_pct, auto_promoted_regression_count}` |
 | Activity | `GET /api/activity?limit=` |
 | Demo | `POST /api/demo/seed`, `POST /api/demo/run-all`, `POST /api/demo/full-loop` |
 | Config / Health | `GET /api/config`, `GET /api/health` |
@@ -619,15 +685,15 @@ Anti-slop rules (enforced, non-negotiable): no gradients, no glassmorphism, no d
 
 | Route | Strength |
 |---|---|
-| `/` | Landing: hero with real `phoenix.otel.register` IDE-card + faux terminal streaming `phoenix-mcp:*` lines; live `/api/stats` strip; 7-node loop with code tags; three-column evidence row; hand-built SVG architecture diagram; three code-walks; dense 6-row comparison table; anti-claim block; CTA band; footer. The hero "Watch it heal" button opens the SSE-streamed `HealingCycleModal` mounted at the layout level — see §4.8 |
+| `/` | Landing: hero with real `phoenix.otel.register` IDE-card + faux terminal streaming `phoenix-mcp:*` lines; live `/api/stats` strip with a match-rate mini-strip below (Baseline avg / Post-heal avg / Lift%); 7-node loop with code tags; three-column evidence row; hand-built SVG architecture diagram; three code-walks; dense 6-row comparison table; anti-claim block; CTA band; footer. The hero "Watch it heal" button opens the SSE-streamed `HealingCycleModal` mounted at the layout level — see §4.8 |
 | `/conversation` | Two-column lg+ (chat + live trace pane), stacked mobile. `phoenix-mcp:*` spans get a 2px brand-green left border in the trace pane. MCP count surfaced separately |
 | `/activity/runs` | Agent-run table with expanding `TraceWaterfall` |
 | `/activity/failures` | Dense list + per-row recharts sparkline + mono `failure_key` + 2px brand-green left border on selection + "Diagnose via Phoenix" CTA |
-| `/healing/improvements` | Triggers list + `DiagnosisTrace` panel (consumes `diagnosis.mcp_tools_used` — real `phoenix-mcp` tool names rendered as span rows) + `PromptDiff` (using the `diff` package: additions brand-green, deletions mute strikethrough) + regression list |
+| `/healing/improvements` | Triggers list + `<ChangeClassBadge />` above the `DiagnosisTrace` (with a brand-green left-bordered "High-risk" container when `change_class == eval_definition`) + `DiagnosisTrace` panel (consumes `diagnosis.mcp_tools_used` — real `phoenix-mcp` tool names rendered as span rows) + `<EvidenceList />` rendering the per-eval `evidence[]` quotes + `PromptDiff` (using the `diff` package: additions brand-green, deletions mute strikethrough) + regression list |
 | `/healing/experiments` | Baseline-vs-candidate scoreboard with ASCII block bars + per-metric Δ + PROMOTED / REJECTED verdict panel |
-| `/healing/release-gate` | Decisions list + 6-rule criteria checklist |
+| `/healing/release-gate` | Decisions list + 9-rule criteria checklist via `<RuleRow />` — grouped "Quality gates" (6) + "// new — multi-dim efficiency gates" (3); `skipped` rows render at 60% opacity |
 | `/prompts` | Master-detail + edit modal with Edited / Original / Diff tabs + confirm-save dialog (draft vs experiment) |
-| `/settings` | Config readout + Phoenix/Gemini health probes |
+| `/settings` | Config readout + Phoenix/Gemini health probes + "Judge calibration" section with `<CanaryTable />` (4 judges × Cohen's κ + accuracy + model + N + last-computed + expandable 3×3 confusion matrix; κ colored by Landis-Koch: brand-green ≥0.6, ink 0.2–0.6, fail-tone <0.2; "Load fixtures" + "Recompute" buttons) |
 
 ### 11.3 Accessibility
 
@@ -727,7 +793,9 @@ Expected breakdown:
 | `judges_combined` | ~6 | Four judges batched into one call per run |
 | `diagnosis_agent` | 3–4 | Multi-turn sub-agent with Phoenix MCP |
 | `patch_synthesis` | 1 | Once per failure cluster |
+| `extract_categories` | 0–1 | LLM-driven failure-mode clustering on the diagnosis sub-agent, one call per `failure_key` |
 | `experiment_baseline+candidate` | 10 | 5 regression cases × 2 prompts |
+| `canary_run_full_set` | ~11 (on demand only) | One Gemini call per canary fixture — 4 judges share the call. Only fired when `POST /api/evals/canary/run` is invoked, never on the auto-seed |
 
 Lightweight mode: 0 calls.
 
@@ -737,7 +805,7 @@ Lightweight mode: 0 calls.
 
 ```bash
 cd backend && .venv/bin/python -m pytest tests/ -q
-# 243 passed
+# 284 passed
 ```
 
 Test groups:
@@ -795,6 +863,9 @@ Total elapsed if the seed has run: under 2 minutes of clicking through.
 | Token-budget overrun | Capped at 5 regression examples. Judges batched into one call per run. ~30 calls per full seed |
 | Healthcheck timing out before live seed completes | Auto-seed runs as an `asyncio.create_task` in the lifespan — API reachable in ~5s, seed continues in background |
 | Phoenix deep-link 404 when `NEXT_PUBLIC_PHOENIX_URL` unset | Render an inert "Configure Phoenix" chip instead of a broken link |
+| Self-preference bias on LLM judges (Gemini grading Gemini) | Cross-family judges not used (gemini-only constraint per Google hackathon); Cohen's κ monitored against the deterministic seed-derived canary fixtures as a proxy. Documented as a known limitation; cross-family judges are the canonical next step for a post-hackathon build |
+| `extract_categories` Gemini call failure | Logged + skipped — diagnosis still completes using `phoenix-mcp:get-spans` + `phoenix-mcp:get-span-annotations`. The categories list is "best effort" enrichment on `evidence_summary`, never load-bearing |
+| `change_class` parse failure on a diagnosis proposal | Defaults to `prompt_addition` so the patch never blocks on classification failure; UI shows the actual class only when Gemini parsed cleanly |
 
 ---
 
@@ -810,12 +881,20 @@ Total elapsed if the seed has run: under 2 minutes of clicking through.
 | Bidirectional MCP (`get-*` + `upsert-prompt`) | ✅ |
 | Phoenix Evals templates (2 of 4 judges) | ✅ |
 | Experiment runner with real baseline/candidate scoring | ✅ |
-| Release gate with 6 promotion rules | ✅ |
+| Release gate with 9 promotion rules (6 quality + 3 multi-dim efficiency) | ✅ |
 | Auto-seed on first boot (live + lightweight) | ✅ |
 | Frontend rebuilt per DESIGN.md | ✅ |
 | "Watch it heal" SSE modal + persistent chip + in-modal approve | ✅ |
 | Vertex AI on the hot path (ADC, no API key) | ✅ |
-| 253 pytest cases passing | ✅ |
+| 284 pytest cases passing | ✅ |
+| 5-section judge template + categorical labels + `JudgeOutput.evidence[]` | ✅ |
+| Cohen's κ canary set — 11 fixtures × 4 judges = 44 hand-curated labels | ✅ |
+| Multi-dimensional release gate (rules 7–9: tool-call efficiency, latency tier, tool adherence) | ✅ |
+| `extract_categories` tool on the diagnosis sub-agent (3-tool surface) | ✅ |
+| `ChangeClass` taxonomy on every prompt patch + High-risk UI banner for `eval_definition` | ✅ |
+| Auto-promote failures to regression set when an `improvement_trigger` fires | ✅ |
+| Match-rate strip on landing page (`baseline_avg_score` / `post_heal_avg_score` / `delta_pct`) | ✅ |
+| Standardized eval payload schema (`rubric_version` + `evidence_json` on every eval row) | ✅ |
 | Open-source license | ✅ MIT |
 | Public repo | Pending push |
 | Hosted URL | ✅ Cloud Run (`us-central1`) — see [README](./README.md) for live links |
