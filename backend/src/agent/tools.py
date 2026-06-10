@@ -670,7 +670,7 @@ async def _call_gemini_extract_categories(
 
     Logs ``gemini_call_purpose=extract_categories`` so the seed-phase
     token audit can attribute spend to this tool exactly. Wrapped in
-    ``@retry`` per CLAUDE.md for resilience against transient 5xx /
+    ``@retry`` per AGENTS.md for resilience against transient 5xx /
     timeout responses.
     """
     settings = get_settings()

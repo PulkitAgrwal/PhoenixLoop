@@ -1,4 +1,4 @@
-# CLAUDE.md — PhoenixLoop Engineering Standards
+# AGENTS.md — PhoenixLoop Engineering Standards
 
 ## Project Overview
 PhoenixLoop is a self-healing Gemini support agent. Full PRD: `/Users/pulkitagarwal/Desktop/PS2/Sem-2/Project/PRD.md`

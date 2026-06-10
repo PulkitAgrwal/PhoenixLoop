@@ -83,7 +83,7 @@ CRITICAL_EVALUATOR_NAMES = {"refund_guard", "privacy_guard", "escalation_guard"}
 
 
 # ---------------------------------------------------------------------------
-# Protocols — duck-typing interfaces per CLAUDE.md (no bare ``Any`` types)
+# Protocols — duck-typing interfaces per AGENTS.md (no bare ``Any`` types)
 # ---------------------------------------------------------------------------
 
 

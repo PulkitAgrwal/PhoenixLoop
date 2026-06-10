@@ -85,7 +85,7 @@ def _extract_prompt_text(template: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Pydantic models for data crossing module boundaries (per CLAUDE.md rules)
+# Pydantic models for data crossing module boundaries (per AGENTS.md rules)
 # ---------------------------------------------------------------------------
 
 
@@ -175,7 +175,7 @@ class DatasetExample(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Protocol for Phoenix client (duck-typing interface per CLAUDE.md)
+# Protocol for Phoenix client (duck-typing interface per AGENTS.md)
 # ---------------------------------------------------------------------------
 
 
