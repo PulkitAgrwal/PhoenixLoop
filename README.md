@@ -11,6 +11,9 @@
 [![Next.js 14](https://img.shields.io/badge/Next.js-14-000000?style=flat-square&logo=next.js&logoColor=white)](https://nextjs.org)
 [![Arize Track](https://img.shields.io/badge/track-Arize-0f4c3a?style=flat-square)](https://rapid-agent.devpost.com/details/arize-resources)
 [![Phoenix-instrumented](https://img.shields.io/badge/Phoenix-instrumented-00d992?style=flat-square)](https://arize.com/docs/phoenix)
+[![▶ Watch demo](https://img.shields.io/badge/▶_Watch_demo-YouTube-FF0000?style=flat-square&logo=youtube&logoColor=white)](https://youtu.be/ccpnwiA1uuo)
+
+**▶ Watch the demo:** https://youtu.be/ccpnwiA1uuo
 
 <p align="center">
   <img src="frontend/public/screenshots/hero.png" alt="Landing page — terminal animation cold-opens on a CitationPresence FAILED line, hero CTA reads &quot;Watch the agent heal itself (~5 min live · 90s fixture)&quot;" width="80%" />
@@ -38,6 +41,7 @@
   </tr>
 </table>
 
+**▶ Video demo:** https://youtu.be/ccpnwiA1uuo
 **Code:** https://github.com/PulkitAgrwal/PhoenixLoop
 **Live demo:** https://phoenixloop-frontend-856079316421.us-central1.run.app
 **API health:** https://phoenixloop-backend-856079316421.us-central1.run.app/api/health
